@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requireOrgRole } from '../../middlewares/auth.middleware.js';
+import { authenticate } from '../../middlewares/auth.middleware.js';
 import { requireCapability } from '../../middlewares/authorize.middleware.js';
 import { fromParam } from '../../middlewares/resolvePropertyId.js';
 import { asyncHandler } from '../../middlewares/asyncHandler.js';
@@ -26,10 +26,14 @@ propertiesRouter.use(authenticate);
 // AuthorizationService.getAccessiblePropertyIds — a user with no accessible
 // properties simply gets an empty list, no separate route gate needed here.
 propertiesRouter.get('/', asyncHandler(listProperties));
-// Creating a brand-new property has no propertyId to scope against, and
-// isn't something a property-scoped manager does — stays organisation-admin
-// only, unchanged.
-propertiesRouter.post('/', requireOrgRole(['OWNER', 'ADMIN']), asyncHandler(createProperty));
+// Creating a brand-new property has no propertyId to scope against, so this
+// is the coarse "does this user hold property.manage on ANY property"
+// form of requireCapability (no resolvePropertyId) — OWNER/ADMIN always
+// pass via AuthorizationService.can's own special case; a property-scoped
+// manager passes only if their organisation has granted property.manage,
+// and only once they already manage at least one existing property (a
+// user with zero PropertyMemberships holds no capabilities to check).
+propertiesRouter.post('/', requireCapability('property.manage'), asyncHandler(createProperty));
 // No route-level capability gate: a resident/tenant may view their own
 // property read-only (pre-existing behaviour), separate from the
 // operational `property.view` capability — PropertiesService.getById

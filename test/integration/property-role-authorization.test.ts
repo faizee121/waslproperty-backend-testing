@@ -278,6 +278,71 @@ describe('property-scoped role authorization', () => {
       expect(afterReset.body.capabilities).toContain('contractors.view');
     });
 
+    it('a PROPERTY_MANAGER cannot create a new property by default, but can once the organisation grants property.manage', async () => {
+      const owner = await registerTestUser(app);
+      const propertyId = await createProperty(owner.accessToken, 'CREATE-01');
+      const person = await addPerson(owner.accessToken, propertyId, 'PROPERTY_MANAGER');
+      const managerToken = residentAccessToken(person.userId, owner.organisationId, person.contactId);
+
+      const beforeRes = await request(app)
+        .post('/api/v1/properties')
+        .set(authHeader(managerToken))
+        .send({
+          name: 'New Block',
+          code: 'CREATE-02',
+          addressLine1: '2 Test Street',
+          city: 'Sydney',
+          country: 'Australia',
+          propertyType: 'RESIDENTIAL',
+        });
+      expect(beforeRes.status).toBe(403);
+
+      const grantRes = await request(app)
+        .put('/api/v1/organisations/me/role-permissions/PROPERTY_MANAGER')
+        .set(authHeader(owner.accessToken))
+        .send({ overrides: [{ capability: 'property.manage', granted: true }] });
+      expect(grantRes.status).toBe(200);
+
+      const afterRes = await request(app)
+        .post('/api/v1/properties')
+        .set(authHeader(managerToken))
+        .send({
+          name: 'New Block',
+          code: 'CREATE-02',
+          addressLine1: '2 Test Street',
+          city: 'Sydney',
+          country: 'Australia',
+          propertyType: 'RESIDENTIAL',
+        });
+      expect(afterRes.status).toBe(201);
+      expect(afterRes.body.code).toBe('CREATE-02');
+    });
+
+    it('a PROPERTY_MANAGER with property.manage granted but no existing property membership still cannot create one', async () => {
+      // property.manage is only ever resolved from an existing, ACTIVE
+      // PropertyMembership — a role override alone grants nothing to a
+      // contact who holds no membership at all to hang it on.
+      const owner = await registerTestUser(app);
+      await request(app)
+        .put('/api/v1/organisations/me/role-permissions/PROPERTY_MANAGER')
+        .set(authHeader(owner.accessToken))
+        .send({ overrides: [{ capability: 'property.manage', granted: true }] });
+
+      const unaffiliatedToken = residentAccessToken('user_ghost', owner.organisationId, 'contact_ghost');
+      const res = await request(app)
+        .post('/api/v1/properties')
+        .set(authHeader(unaffiliatedToken))
+        .send({
+          name: 'New Block',
+          code: 'CREATE-03',
+          addressLine1: '3 Test Street',
+          city: 'Sydney',
+          country: 'Australia',
+          propertyType: 'RESIDENTIAL',
+        });
+      expect(res.status).toBe(403);
+    });
+
     it('rejects a PROPERTY_MANAGER (or MEMBER) from changing role configuration — organisation admins only', async () => {
       const owner = await registerTestUser(app);
       const propertyId = await createProperty(owner.accessToken, 'RBAC-01');
