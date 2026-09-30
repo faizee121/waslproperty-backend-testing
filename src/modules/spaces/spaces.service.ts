@@ -1,9 +1,10 @@
-import type { Prisma, PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient, SpaceStrataClassification } from '@prisma/client';
 import { recordActivity } from '../activity/activity.js';
 import { ConflictError, NotFoundError } from '../../errors/AppError.js';
 import { getOccupiedSpaceIds, type Occupancy } from '../../lib/occupancy.js';
 import type { PaginatedResult, PaginationQuery } from '../../lib/pagination.js';
 import { assertOrganisationFeature } from '../organisations/organisation-features.js';
+import { resolveSpaceClassification } from '../strata/strata.service.js';
 import type { CreateSpaceInput, UpdateSpaceInput } from './spaces.schemas.js';
 
 /** See PropertiesService's identically-named helper — same trigger
@@ -12,8 +13,23 @@ function touchesStrataFields(input: CreateSpaceInput | UpdateSpaceInput): boolea
   return (
     input.isStrataLot !== undefined ||
     input.lotNumber !== undefined ||
-    input.entitlementValue !== undefined
+    input.entitlementValue !== undefined ||
+    input.strataClassification !== undefined
   );
+}
+
+/** LOT requires a lot number and a positive UOE (M11-B.1, Section 4) —
+ * enforced only when `strataClassification` was explicitly requested (the
+ * new, expressive path). The legacy bare `isStrataLot` boolean predates
+ * this rule and stays exactly as permissive as it always was, for
+ * backward compatibility with M11-A data/callers. */
+function assertLotHasRequiredFields(lotNumber: string | null | undefined, entitlementValue: unknown) {
+  if (!lotNumber) {
+    throw new ConflictError('A Lot/Unit requires a lot number');
+  }
+  if (entitlementValue === null || entitlementValue === undefined || Number(entitlementValue) <= 0) {
+    throw new ConflictError('A Lot/Unit requires a positive Units of Entitlement value');
+  }
 }
 
 export interface SpaceKeyPerson {
@@ -133,6 +149,7 @@ export class SpacesService {
   ) {
     const property = await this.assertPropertyInOrg(organisationId, propertyId);
 
+    let classification: SpaceStrataClassification = 'UNCLASSIFIED';
     if (touchesStrataFields(input)) {
       await assertOrganisationFeature(this.prisma, organisationId, 'STRATA_MANAGEMENT');
       if (input.isStrataLot && !property.isStrataManaged) {
@@ -140,6 +157,19 @@ export class SpacesService {
           'This space cannot be marked a strata lot: its property is not configured as strata-managed',
         );
       }
+      classification = resolveSpaceClassification('UNCLASSIFIED', input);
+      if (classification === 'LOT' && input.strataClassification === 'LOT') {
+        assertLotHasRequiredFields(input.lotNumber, input.entitlementValue);
+      }
+    }
+
+    // A new Space in an ACTIVE strata scheme must be explicitly
+    // classified — never silently left UNCLASSIFIED (M11-B.1, Section 7).
+    // Backend-enforced, not just hidden in the UI.
+    if (property.strataStatus === 'ACTIVE' && input.strataClassification === undefined) {
+      throw new ConflictError(
+        'This property is an active strata scheme — choose whether this new space is a Lot/Unit or Common Property/Area.',
+      );
     }
 
     const clash = await this.prisma.space.findUnique({
@@ -151,7 +181,13 @@ export class SpacesService {
 
     return this.prisma.$transaction(async (tx) => {
       const space = await tx.space.create({
-        data: { organisationId, propertyId, ...input },
+        data: {
+          organisationId,
+          propertyId,
+          ...input,
+          strataClassification: classification,
+          isStrataLot: classification === 'LOT',
+        },
       });
 
       await recordActivity(tx, {
@@ -173,7 +209,9 @@ export class SpacesService {
     const space = await this.prisma.space.findFirst({
       where: { id: spaceId, organisationId },
       include: {
-        property: { select: { id: true, name: true, code: true, isStrataManaged: true } },
+        property: {
+          select: { id: true, name: true, code: true, isStrataManaged: true, strataStatus: true },
+        },
       },
     });
     if (!space) {
@@ -214,6 +252,7 @@ export class SpacesService {
       throw new NotFoundError('Space not found');
     }
 
+    let classification = existing.strataClassification;
     if (touchesStrataFields(input)) {
       await assertOrganisationFeature(this.prisma, organisationId, 'STRATA_MANAGEMENT');
       const wantsStrataLot = input.isStrataLot ?? existing.isStrataLot;
@@ -227,6 +266,13 @@ export class SpacesService {
             'This space cannot be marked a strata lot: its property is not configured as strata-managed',
           );
         }
+      }
+      classification = resolveSpaceClassification(existing.strataClassification, input);
+      if (classification === 'LOT' && input.strataClassification === 'LOT') {
+        assertLotHasRequiredFields(
+          input.lotNumber ?? existing.lotNumber,
+          input.entitlementValue ?? existing.entitlementValue,
+        );
       }
     }
 
@@ -244,7 +290,7 @@ export class SpacesService {
     return this.prisma.$transaction(async (tx) => {
       const space = await tx.space.update({
         where: { id: spaceId },
-        data: input,
+        data: { ...input, strataClassification: classification, isStrataLot: classification === 'LOT' },
       });
 
       await recordActivity(tx, {

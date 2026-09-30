@@ -11,6 +11,14 @@ import {
 } from '../people/people.controller.js';
 import { createSpaceForProperty, listSpacesForProperty } from '../spaces/spaces.controller.js';
 import {
+  bulkSetStrataLots,
+  classifyStrataSpaces,
+  completeStrataSetup,
+  enableStrata,
+  getStrataSummary,
+  updateStrataPlan,
+} from '../strata/strata.controller.js';
+import {
   createProperty,
   getProperty,
   getPropertyInsights,
@@ -82,4 +90,41 @@ propertiesRouter.get(
   '/:propertyId/activity',
   requireCapability('activity.view', fromParam('propertyId')),
   asyncHandler(listActivityForProperty),
+);
+
+// Strata (M11-B) — the guided "Enable Strata Management" setup flow and
+// the Units of Entitlement summary. strata.view/strata.manage, not
+// property.manage/spaces.manage: narrower, purpose-built capabilities an
+// organisation grants independently (see capabilities.ts) — a property
+// manager who can edit a property's name doesn't automatically get to
+// configure its strata scheme, and vice versa.
+propertiesRouter.get(
+  '/:propertyId/strata',
+  requireCapability('strata.view', fromParam('propertyId')),
+  asyncHandler(getStrataSummary),
+);
+propertiesRouter.post(
+  '/:propertyId/strata/enable',
+  requireCapability('strata.manage', fromParam('propertyId')),
+  asyncHandler(enableStrata),
+);
+propertiesRouter.patch(
+  '/:propertyId/strata/plan',
+  requireCapability('strata.manage', fromParam('propertyId')),
+  asyncHandler(updateStrataPlan),
+);
+propertiesRouter.put(
+  '/:propertyId/strata/lots',
+  requireCapability('strata.manage', fromParam('propertyId')),
+  asyncHandler(bulkSetStrataLots),
+);
+propertiesRouter.put(
+  '/:propertyId/strata/spaces/classify',
+  requireCapability('strata.manage', fromParam('propertyId')),
+  asyncHandler(classifyStrataSpaces),
+);
+propertiesRouter.post(
+  '/:propertyId/strata/complete',
+  requireCapability('strata.manage', fromParam('propertyId')),
+  asyncHandler(completeStrataSetup),
 );

@@ -297,14 +297,31 @@ model Property {
   /// STRATA_MANAGEMENT feature (see organisation-features.ts); enforced in
   /// PropertiesService, not just hidden in the UI. Never used to calculate
   /// anything — no levy/fund logic reads these fields.
-  isStrataManaged  Boolean @default(false)
+  isStrataManaged                      Boolean      @default(false)
   /// The scheme/strata plan registration number (e.g. an Australian "SP"
   /// number) — an identifying reference only, not validated against any
   /// jurisdiction's registry.
-  strataPlanNumber String?
+  strataPlanNumber                     String?
   /// Optional display name for the scheme (e.g. "Owners Corporation SP12345"),
   /// independent of Property.name.
-  strataSchemeName String?
+  strataSchemeName                     String?
+  /// Where this property sits in the guided "Enable Strata Management"
+  /// setup flow (M11-B) — NOT_ENABLED/SETUP_IN_PROGRESS/ACTIVE. Distinct
+  /// from isStrataManaged (M11-A, unchanged): isStrataManaged is a plain
+  /// flag any caller can still set directly via PATCH; strataStatus is
+  /// only ever advanced by StrataService's guided setup endpoints, which
+  /// also set isStrataManaged=true once the scheme reaches ACTIVE (the
+  /// same flag SpacesService already gates isStrataLot on). A property
+  /// created before M11-B, or one only ever touched via the old raw PATCH
+  /// field, simply stays NOT_ENABLED here — never inferred from
+  /// isStrataManaged in reverse.
+  strataStatus                         StrataStatus @default(NOT_ENABLED)
+  /// The Total Units of Entitlement declared on the Strata Plan document,
+  /// used only as a reconciliation target for SUM(Space.entitlementValue)
+  /// across this property's strata lots (see strata.calculations.ts) —
+  /// never itself the calculated total, and never read by any levy/fund
+  /// logic (none exists yet). Null until recorded during setup.
+  strataPlanDeclaredUnitsOfEntitlement Decimal?     @db.Decimal(12, 2)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -334,6 +351,33 @@ enum PropertyStatus {
   ARCHIVED
 }
 
+/// The guided "Enable Strata Management" setup flow's state (M11-B) — see
+/// Property.strataStatus's own doc comment. No disable/deactivate
+/// transition exists yet (see the M11-B requirements: no destructive
+/// disabling until real financial/strata history exists to protect).
+enum StrataStatus {
+  NOT_ENABLED
+  SETUP_IN_PROGRESS
+  ACTIVE
+}
+
+/// Whether a Space in a strata-managed Property is an independent strata
+/// Lot/Unit, a Common Property/Area, or not yet classified (M11-B.1). A
+/// physical Space is never assumed to be a Lot just because it exists or
+/// is named like one ("Lot 4" as a name proves nothing) — the Strata Plan
+/// is the only source of truth for what's actually a Lot, so this is
+/// always an explicit, human-made choice, never inferred. Meaningless
+/// (and always UNCLASSIFIED) for a Space on a non-strata Property — see
+/// SpacesService for where that's enforced. Kept in sync with the legacy
+/// `isStrataLot` boolean by SpacesService/StrataService centrally (never
+/// two independently-writable sources of truth) — see
+/// resolveLegacySpaceClassificationTransition.
+enum SpaceStrataClassification {
+  UNCLASSIFIED
+  LOT
+  COMMON_PROPERTY
+}
+
 /// A generic leasable/occupiable unit within a property. Deliberately not
 /// named "Unit" so the domain stays generic across residential, commercial,
 /// retail, mixed-use, villas, parking, storage and common areas. The UI may
@@ -351,16 +395,23 @@ model Space {
 
   /// Foundational strata lot metadata (M11-A) — see Property.isStrataManaged.
   /// A space can only be marked a strata lot when its Property is itself
-  /// isStrataManaged (enforced in SpacesService). entitlementValue is stored
-  /// as informational data only — it is never read by any calculation.
-  isStrataLot      Boolean  @default(false)
+  /// isStrataManaged (enforced in SpacesService). Kept in sync with
+  /// strataClassification (M11-B.1): true if and only if
+  /// strataClassification is LOT — see SpacesService/StrataService.
+  isStrataLot          Boolean                   @default(false)
   /// The strata lot/unit number, distinct from the generic `code` field
-  /// used across every property type.
-  lotNumber        String?
-  /// Unit entitlement, if known — purely informational until confirmed
-  /// business rules exist for how it should be used (see M11 requirements
-  /// doc). Not used in any calculation.
-  entitlementValue Decimal? @db.Decimal(12, 2)
+  /// used across every property type. Only meaningful when
+  /// strataClassification is LOT.
+  lotNumber            String?
+  /// Units of Entitlement — the real, calculated figure once
+  /// strataClassification is LOT (see strata.calculations.ts). Null/unused
+  /// for COMMON_PROPERTY and UNCLASSIFIED spaces; never read by any
+  /// calculation for those.
+  entitlementValue     Decimal?                  @db.Decimal(12, 2)
+  /// LOT / COMMON_PROPERTY / UNCLASSIFIED (M11-B.1) — see the enum's own
+  /// doc comment. Always UNCLASSIFIED (and irrelevant) for a Space whose
+  /// Property isn't strata-managed.
+  strataClassification SpaceStrataClassification @default(UNCLASSIFIED)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -614,6 +665,23 @@ enum ActivityEventType {
   /// any of the three workflow paths (NONE / APPROVAL_ONLY /
   /// APPROVAL_THEN_SIGNATURE) — see WorkOrderVariationsService.
   WORK_ORDER_VARIATION_AUTHORISED
+  /// The property entered the guided "Enable Strata Management" flow
+  /// (NOT_ENABLED -> SETUP_IN_PROGRESS) — fired once, not on every field
+  /// edit made while still in setup (see StrataPlanConfigured below for
+  /// that).
+  STRATA_ENABLED
+  /// The Strata Plan's own fields (number, scheme name, declared total
+  /// UOE) were set/changed — one coarse event, matching the existing
+  /// APPROVAL_POLICY_UPDATED/CONTRACTOR_COMPLIANCE_REQUIREMENTS_UPDATED
+  /// precedent rather than one event per field.
+  STRATA_PLAN_CONFIGURED
+  /// One or more lots' Units of Entitlement were set/changed in a single
+  /// save (the wizard's bulk "Lots & Units" step, or a later edit) — one
+  /// event per save, never one per lot, to avoid a noisy trail when
+  /// entering 100+ lots.
+  STRATA_ENTITLEMENTS_UPDATED
+  /// SETUP_IN_PROGRESS -> ACTIVE — the guided setup flow's final step.
+  STRATA_SETUP_COMPLETED
 }
 
 // --- Resident invitations (Slice 2 / M6.5) ---
@@ -1149,7 +1217,7 @@ model ContractorQuote {
   /// Immutable afterwards: a later change to the organisation's policy must
   /// never rewrite this historical decision (see ApprovalPolicyService's
   /// own doc comment).
-  requiredWorkflowMode WorkflowMode?
+  requiredWorkflowMode   WorkflowMode?
   /// Frozen explanation of the resolution above (matched rule's band,
   /// currency, human-readable reason) — see ApprovalPolicyResolution in
   /// approval-policy.service.ts. Kept as JSON, not a live FK to
@@ -1317,7 +1385,7 @@ model ApprovalPolicyRule {
   policyId       String
 
   /// Inclusive lower bound, in the policy's currencyCode.
-  minAmount Decimal @db.Decimal(12, 2)
+  minAmount Decimal  @db.Decimal(12, 2)
   /// Inclusive upper bound; null = open-ended ("above X") — exactly one
   /// rule per policy may have this null, and it must be the highest band.
   maxAmount Decimal? @db.Decimal(12, 2)
@@ -1523,10 +1591,10 @@ model WorkOrderVariation {
   /// variation can now only reach APPROVED once every gate this implies
   /// has actually completed — see WorkOrderVariationsService.approve /
   /// handleWaslSignCallback.
-  workflowMode    WorkflowMode?
-  approvalStatus  ApprovalStatus?
-  signatureStatus SignatureStatus?
-  signedAt        DateTime?
+  workflowMode        WorkflowMode?
+  approvalStatus      ApprovalStatus?
+  signatureStatus     SignatureStatus?
+  signedAt            DateTime?
   /// Populated only once a SIGNATURE_ONLY / APPROVAL_THEN_SIGNATURE
   /// signature workflow has actually been started — same WaslSign
   /// integration ContractorQuote uses, never a second implementation.
