@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { asyncHandler } from '../../../middlewares/asyncHandler.js';
-import { authenticatePlatform, requirePlatformCapability } from '../../../middlewares/auth.middleware.js';
+import {
+  authenticatePlatform,
+  requirePlatformCapability,
+} from '../../../middlewares/auth.middleware.js';
 import {
   getBackofficeOrganisation,
   listBackofficeOrganisations,

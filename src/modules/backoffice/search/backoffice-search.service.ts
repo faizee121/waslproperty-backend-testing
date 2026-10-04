@@ -26,63 +26,68 @@ const PER_TYPE_LIMIT = 5;
 export class BackofficeSearchService {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async search(
-    query: string,
-    capabilities: readonly string[],
-  ): Promise<BackofficeSearchResult[]> {
+  async search(query: string, capabilities: readonly string[]): Promise<BackofficeSearchResult[]> {
     const q = query.trim();
     if (!q) return [];
 
     const insensitive = { contains: q, mode: 'insensitive' as const };
 
-    const [organisations, properties, spaces, contacts, requests, workOrders, contractors, communications] =
-      await Promise.all([
-        this.prisma.organisation.findMany({
-          where: { name: insensitive },
-          take: PER_TYPE_LIMIT,
-        }),
-        this.prisma.property.findMany({
-          where: { OR: [{ name: insensitive }, { code: insensitive }] },
-          take: PER_TYPE_LIMIT,
-          include: { organisation: { select: { id: true, name: true } } },
-        }),
-        this.prisma.space.findMany({
-          where: { OR: [{ name: insensitive }, { code: insensitive }] },
-          take: PER_TYPE_LIMIT,
-          include: { property: { include: { organisation: { select: { id: true, name: true } } } } },
-        }),
-        this.prisma.propertyContact.findMany({
-          where: {
-            OR: [{ firstName: insensitive }, { lastName: insensitive }, { email: insensitive }],
-          },
-          take: PER_TYPE_LIMIT,
-          include: { organisation: { select: { id: true, name: true } } },
-        }),
-        this.prisma.maintenanceRequest.findMany({
-          where: { title: insensitive },
-          take: PER_TYPE_LIMIT,
-          include: {
-            property: { include: { organisation: { select: { id: true, name: true } } } },
-          },
-        }),
-        this.prisma.workOrder.findMany({
-          where: { title: insensitive },
-          take: PER_TYPE_LIMIT,
-          include: {
-            property: { include: { organisation: { select: { id: true, name: true } } } },
-          },
-        }),
-        this.prisma.contractor.findMany({
-          where: { name: insensitive },
-          take: PER_TYPE_LIMIT,
-          include: { organisation: { select: { id: true, name: true } } },
-        }),
-        this.prisma.communication.findMany({
-          where: { title: insensitive },
-          take: PER_TYPE_LIMIT,
-          include: { organisation: { select: { id: true, name: true } } },
-        }),
-      ]);
+    const [
+      organisations,
+      properties,
+      spaces,
+      contacts,
+      requests,
+      workOrders,
+      contractors,
+      communications,
+    ] = await Promise.all([
+      this.prisma.organisation.findMany({
+        where: { name: insensitive },
+        take: PER_TYPE_LIMIT,
+      }),
+      this.prisma.property.findMany({
+        where: { OR: [{ name: insensitive }, { code: insensitive }] },
+        take: PER_TYPE_LIMIT,
+        include: { organisation: { select: { id: true, name: true } } },
+      }),
+      this.prisma.space.findMany({
+        where: { OR: [{ name: insensitive }, { code: insensitive }] },
+        take: PER_TYPE_LIMIT,
+        include: { property: { include: { organisation: { select: { id: true, name: true } } } } },
+      }),
+      this.prisma.propertyContact.findMany({
+        where: {
+          OR: [{ firstName: insensitive }, { lastName: insensitive }, { email: insensitive }],
+        },
+        take: PER_TYPE_LIMIT,
+        include: { organisation: { select: { id: true, name: true } } },
+      }),
+      this.prisma.maintenanceRequest.findMany({
+        where: { title: insensitive },
+        take: PER_TYPE_LIMIT,
+        include: {
+          property: { include: { organisation: { select: { id: true, name: true } } } },
+        },
+      }),
+      this.prisma.workOrder.findMany({
+        where: { title: insensitive },
+        take: PER_TYPE_LIMIT,
+        include: {
+          property: { include: { organisation: { select: { id: true, name: true } } } },
+        },
+      }),
+      this.prisma.contractor.findMany({
+        where: { name: insensitive },
+        take: PER_TYPE_LIMIT,
+        include: { organisation: { select: { id: true, name: true } } },
+      }),
+      this.prisma.communication.findMany({
+        where: { title: insensitive },
+        take: PER_TYPE_LIMIT,
+        include: { organisation: { select: { id: true, name: true } } },
+      }),
+    ]);
 
     const results: BackofficeSearchResult[] = [];
 

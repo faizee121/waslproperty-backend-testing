@@ -79,7 +79,11 @@ export class BackofficeOperationsService {
               id: true,
               title: true,
               property: {
-                select: { id: true, name: true, organisation: { select: { id: true, name: true } } },
+                select: {
+                  id: true,
+                  name: true,
+                  organisation: { select: { id: true, name: true } },
+                },
               },
             },
           },

@@ -8,7 +8,7 @@ import {
 
 describe('classifySqlStatement', () => {
   it('classifies a plain SELECT as read-only, returning rows', () => {
-    const r = classifySqlStatement('SELECT * FROM organisations WHERE id = \'org_1\'');
+    const r = classifySqlStatement("SELECT * FROM organisations WHERE id = 'org_1'");
     expect(r.kind).toBe('SELECT');
     expect(r.isMutating).toBe(false);
     expect(r.returnsRows).toBe(true);
@@ -16,9 +16,9 @@ describe('classifySqlStatement', () => {
   });
 
   it('classifies INSERT/UPDATE/DELETE as mutating', () => {
-    expect(classifySqlStatement("INSERT INTO x (a) VALUES (1)").isMutating).toBe(true);
-    expect(classifySqlStatement("UPDATE x SET a = 1").isMutating).toBe(true);
-    expect(classifySqlStatement("DELETE FROM x").isMutating).toBe(true);
+    expect(classifySqlStatement('INSERT INTO x (a) VALUES (1)').isMutating).toBe(true);
+    expect(classifySqlStatement('UPDATE x SET a = 1').isMutating).toBe(true);
+    expect(classifySqlStatement('DELETE FROM x').isMutating).toBe(true);
   });
 
   it('classifies DDL (CREATE/ALTER/DROP/TRUNCATE) as mutating', () => {
@@ -29,8 +29,8 @@ describe('classifySqlStatement', () => {
   });
 
   it('an UPDATE/DELETE/INSERT with RETURNING is expected to return rows', () => {
-    expect(classifySqlStatement("UPDATE x SET a = 1 RETURNING id").returnsRows).toBe(true);
-    expect(classifySqlStatement("DELETE FROM x RETURNING id").returnsRows).toBe(true);
+    expect(classifySqlStatement('UPDATE x SET a = 1 RETURNING id').returnsRows).toBe(true);
+    expect(classifySqlStatement('DELETE FROM x RETURNING id').returnsRows).toBe(true);
   });
 
   it('a DDL statement does not expect rows back', () => {
@@ -46,7 +46,7 @@ describe('classifySqlStatement', () => {
 
   it('conservatively treats a writable CTE as mutating', () => {
     const r = classifySqlStatement(
-      "WITH deleted AS (DELETE FROM x RETURNING id) SELECT count(*) FROM deleted",
+      'WITH deleted AS (DELETE FROM x RETURNING id) SELECT count(*) FROM deleted',
     );
     expect(r.kind).toBe('WITH');
     expect(r.isMutating).toBe(true);
@@ -58,7 +58,7 @@ describe('classifySqlStatement', () => {
   });
 
   it('counts multiple semicolon-separated statements after stripping comments', () => {
-    const sql = "SELECT 1; -- a comment with a ; inside\nSELECT 2;";
+    const sql = 'SELECT 1; -- a comment with a ; inside\nSELECT 2;';
     expect(classifySqlStatement(sql).statementCount).toBe(2);
   });
 
@@ -107,7 +107,7 @@ describe('sqlFingerprint', () => {
 describe('sanitizeErrorForAudit', () => {
   it('redacts a quoted literal value echoed back in a constraint-violation-style error message', () => {
     const sanitized = sanitizeErrorForAudit(
-      "duplicate key value violates unique constraint \"users_email_key\" Key (email)=('leaked@example.com') already exists.",
+      'duplicate key value violates unique constraint "users_email_key" Key (email)=(\'leaked@example.com\') already exists.',
     );
     expect(sanitized).not.toContain('leaked@example.com');
   });

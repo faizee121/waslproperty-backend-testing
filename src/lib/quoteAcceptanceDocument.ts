@@ -265,7 +265,10 @@ export async function generateVariationAcceptanceDocument(
     'This variation',
     `${variationAmount >= 0 ? '+' : ''}${input.variationAmount} ${input.currencyCode}`,
   );
-  drawLabelValue('Proposed new authorised total', `${proposedNewTotal.toFixed(2)} ${input.currencyCode}`);
+  drawLabelValue(
+    'Proposed new authorised total',
+    `${proposedNewTotal.toFixed(2)} ${input.currencyCode}`,
+  );
 
   y -= 12;
   page.drawText('Variation scope', { x: left, y, size: 12, font: bold });

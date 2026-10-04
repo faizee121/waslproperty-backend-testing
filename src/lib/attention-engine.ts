@@ -457,7 +457,12 @@ async function findContractorCredentialsExpired(
 ): Promise<AttentionItem[]> {
   const rows = await prisma.contractorCredential.findMany({
     where: { organisationId, verificationStatus: 'VERIFIED', expiresAt: { lt: now } },
-    select: { id: true, type: true, expiresAt: true, contractor: { select: { id: true, name: true } } },
+    select: {
+      id: true,
+      type: true,
+      expiresAt: true,
+      contractor: { select: { id: true, name: true } },
+    },
     take: ATTENTION_HARD_CAP,
   });
 
@@ -489,7 +494,12 @@ async function findContractorCredentialsExpiringSoon(
       verificationStatus: 'VERIFIED',
       expiresAt: { gte: now, lte: warnAt },
     },
-    select: { id: true, type: true, expiresAt: true, contractor: { select: { id: true, name: true } } },
+    select: {
+      id: true,
+      type: true,
+      expiresAt: true,
+      contractor: { select: { id: true, name: true } },
+    },
     take: ATTENTION_HARD_CAP,
   });
 
@@ -519,7 +529,12 @@ async function findContractorCredentialsPendingVerification(
 ): Promise<AttentionItem[]> {
   const rows = await prisma.contractorCredential.findMany({
     where: { organisationId, verificationStatus: 'PENDING' },
-    select: { id: true, type: true, createdAt: true, contractor: { select: { id: true, name: true } } },
+    select: {
+      id: true,
+      type: true,
+      createdAt: true,
+      contractor: { select: { id: true, name: true } },
+    },
     take: ATTENTION_HARD_CAP,
   });
 
@@ -562,7 +577,11 @@ async function findWorkOrderContractorNoLongerEligible(
   now: Date,
 ): Promise<AttentionItem[]> {
   const candidates = await prisma.workOrder.findMany({
-    where: { organisationId, status: { in: ['SCHEDULED', 'IN_PROGRESS'] }, contractorId: { not: null } },
+    where: {
+      organisationId,
+      status: { in: ['SCHEDULED', 'IN_PROGRESS'] },
+      contractorId: { not: null },
+    },
     select: {
       id: true,
       title: true,

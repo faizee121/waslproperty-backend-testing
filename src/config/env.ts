@@ -117,6 +117,107 @@ const envSchema = z.object({
   BACKOFFICE_SQL_MAX_UPDATE_ROWS: z.coerce.number().default(500),
   BACKOFFICE_SQL_RESULT_ROW_LIMIT: z.coerce.number().default(500),
   BACKOFFICE_SQL_STATEMENT_TIMEOUT_MS: z.coerce.number().default(5000),
+
+  // --- Wasl AI (M14) ---
+  // Platform-wide kill switch — one of three ANDed conditions for AI to be
+  // usable at all (see AiService.isAiAvailableForUser); defaults off so no
+  // deployment accidentally exposes AI just by having a key present.
+  AI_ENABLED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Only one provider is implemented this milestone (see
+  // src/modules/ai/providers) — the field exists so a second provider
+  // never requires touching call sites, only provider-factory.ts.
+  AI_PROVIDER: z.enum(['deepseek']).default('deepseek'),
+  DEEPSEEK_API_KEY: z.string().optional(),
+  // Used for the lightweight ROUTINE model-routing tier (most tool-using
+  // investigation turns).
+  DEEPSEEK_MODEL: z.string().default('deepseek-chat'),
+  // Used for the ANALYSIS tier (heavier synthesis, e.g. quote/pattern
+  // reasoning over an already-assembled evidence set) — both tiers may
+  // point at the same model; this is a routing seam, not a second
+  // integration. See providers/provider-factory.ts.
+  DEEPSEEK_ANALYSIS_MODEL: z.string().default('deepseek-reasoner'),
+  // Reserved for a future milestone — no write action exists yet (M14 is
+  // strictly read-only), but the flag is defined now so the eventual
+  // PreparedAiAction execution path has a kill switch from day one rather
+  // than being retrofitted. Always false until that milestone ships.
+  AI_WRITE_ACTIONS_ENABLED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Execution budgets — every one fails closed (see
+  // src/modules/ai/budget/execution-budget.ts): exceeding any of these
+  // ends the turn with a clear "couldn't complete" response, never a
+  // fabricated answer.
+  AI_MAX_TURNS: z.coerce.number().default(4),
+  AI_MAX_TOOL_CALLS: z.coerce.number().default(8),
+  AI_MAX_TOOL_CALLS_PER_TOOL: z.coerce.number().default(3),
+  AI_TOOL_TIMEOUT_MS: z.coerce.number().default(15000),
+  AI_PROVIDER_TIMEOUT_MS: z.coerce.number().default(45000),
+  AI_MAX_OUTPUT_TOKENS: z.coerce.number().default(2000),
+  // Best-effort, single-process rate limiting (src/modules/ai/rate-limit) —
+  // not distributed/Redis-backed, since no shared cache layer exists
+  // elsewhere in this stack. Sufficient to blunt runaway usage from one
+  // deployment instance; documented as a deliberate simplification in the
+  // M14 report, not a scaling-safe primitive.
+  AI_RATE_LIMIT_PER_USER_PER_HOUR: z.coerce.number().default(30),
+
+  // --- Property Document Intelligence (M15) ---
+  // Cost/execution bounds for the document-analysis pipeline — every one
+  // fails closed (an exceeded bound ends the analysis as FAILED/
+  // REVIEW_REQUIRED, never a silently-truncated "best effort" extraction
+  // treated as complete).
+  DOCUMENT_ANALYSIS_MAX_FILE_SIZE_MB: z.coerce.number().default(15),
+  DOCUMENT_ANALYSIS_MAX_PAGES: z.coerce.number().default(20),
+  // Per-page OCR text is truncated to this many characters before being
+  // handed to the AI interpretation stage — bounds both AI input size and
+  // the stored extraction/provenance payload.
+  DOCUMENT_ANALYSIS_MAX_OCR_TEXT_CHARS_PER_PAGE: z.coerce.number().default(6000),
+  DOCUMENT_ANALYSIS_MAX_AI_OUTPUT_TOKENS: z.coerce.number().default(3000),
+  DOCUMENT_ANALYSIS_OCR_TIMEOUT_MS: z.coerce.number().default(90000),
+  DOCUMENT_ANALYSIS_PROVIDER_TIMEOUT_MS: z.coerce.number().default(60000),
+  // The whole pipeline (render -> OCR -> AI interpretation -> validation)
+  // is abandoned (FAILED) past this — the single top-level bound the async
+  // analysis runner enforces around everything else.
+  DOCUMENT_ANALYSIS_TOTAL_TIMEOUT_MS: z.coerce.number().default(240000),
+  // A document stuck in ANALYSING past this long (server restarted
+  // mid-analysis, no job recovery exists — see the M15 report's
+  // documented limitation) is treated as FAILED the next time it's read,
+  // rather than polling forever.
+  DOCUMENT_ANALYSIS_STUCK_THRESHOLD_MS: z.coerce.number().default(300000),
+
+  // --- Vision fallback (M15.1) ---
+  // A SEPARATE kill switch from AI_ENABLED — OCR+text-interpretation
+  // stays the default path even when general AI is on; vision only runs
+  // when this is explicitly true AND a critical field genuinely failed
+  // OCR/reconciliation (see nsw-strata-plan/vision-fallback.ts). Fails
+  // closed: unset/false means the pipeline behaves exactly as it did
+  // before this feature existed.
+  DOCUMENT_ANALYSIS_VISION_ENABLED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Mirrors AI_PROVIDER's shape (a routing seam, not a built-out router) —
+  // the field exists so a second vision vendor never requires touching
+  // call sites, only vision-provider-factory.ts.
+  VISION_PROVIDER: z.enum(['deepseek']).default('deepseek'),
+  // Deliberately a DIFFERENT env var from DEEPSEEK_MODEL/
+  // DEEPSEEK_ANALYSIS_MODEL — vision capability must be named explicitly,
+  // never inferred just because one of those happens to also be set to a
+  // vision-capable model name (see vision-provider.interface.ts's doc
+  // comment).
+  DEEPSEEK_VISION_MODEL: z.string().default('deepseek-flash'),
+  // Bounded: at most this many candidate pages are ever rendered and sent
+  // to vision for one document — cost control, never the whole document.
+  DOCUMENT_ANALYSIS_VISION_MAX_PAGES: z.coerce.number().default(1),
+  DOCUMENT_ANALYSIS_VISION_RENDER_SCALE: z.coerce.number().default(4),
+  DOCUMENT_ANALYSIS_VISION_TIMEOUT_MS: z.coerce.number().default(60000),
+  DOCUMENT_ANALYSIS_VISION_MAX_OUTPUT_TOKENS: z.coerce.number().default(2000),
+  // Bounded retries on an invalid/unparseable vision response — mirrors
+  // interpretStrataPlan()'s own retry bound, never open-ended.
+  DOCUMENT_ANALYSIS_VISION_MAX_RETRIES: z.coerce.number().default(1),
 });
 
 const parsed = envSchema.safeParse(process.env);

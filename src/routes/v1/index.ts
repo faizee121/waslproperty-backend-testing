@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { aiRouter } from '../../modules/ai/ai.routes.js';
 import { authRouter } from '../../modules/auth/auth.routes.js';
 import { backofficeRouter } from '../../modules/backoffice/backoffice.routes.js';
 import { communicationsRouter } from '../../modules/communications/communications.routes.js';
@@ -10,6 +11,7 @@ import { notificationsRouter } from '../../modules/notifications/notifications.r
 import { organisationsRouter } from '../../modules/organisations/organisations.routes.js';
 import { peopleRouter } from '../../modules/people/people.routes.js';
 import { propertiesRouter } from '../../modules/properties/properties.routes.js';
+import { propertyDocumentsRouter } from '../../modules/property-documents/property-documents.routes.js';
 import { quoteRoundsRouter } from '../../modules/quotes/quote-rounds.routes.js';
 import { quotesRouter } from '../../modules/quotes/quotes.routes.js';
 import { rfqPublicRouter } from '../../modules/quotes/rfq-public.routes.js';
@@ -42,3 +44,5 @@ apiV1Router.use('/communications', communicationsRouter);
 apiV1Router.use('/saved-audiences', savedAudiencesRouter);
 apiV1Router.use('/notifications', notificationsRouter);
 apiV1Router.use('/backoffice', backofficeRouter);
+apiV1Router.use('/ai', aiRouter);
+apiV1Router.use('/property-documents', propertyDocumentsRouter);

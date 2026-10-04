@@ -3,6 +3,7 @@ import { recordActivity } from '../activity/activity.js';
 import { ConflictError, NotFoundError } from '../../errors/AppError.js';
 import { getOccupiedSpaceIds, type Occupancy } from '../../lib/occupancy.js';
 import type { PaginatedResult, PaginationQuery } from '../../lib/pagination.js';
+import { withPublicReference } from '../../lib/public-reference.js';
 import { assertOrganisationFeature } from '../organisations/organisation-features.js';
 import { resolveSpaceClassification } from '../strata/strata.service.js';
 import type { CreateSpaceInput, UpdateSpaceInput } from './spaces.schemas.js';
@@ -23,11 +24,18 @@ function touchesStrataFields(input: CreateSpaceInput | UpdateSpaceInput): boolea
  * new, expressive path). The legacy bare `isStrataLot` boolean predates
  * this rule and stays exactly as permissive as it always was, for
  * backward compatibility with M11-A data/callers. */
-function assertLotHasRequiredFields(lotNumber: string | null | undefined, entitlementValue: unknown) {
+function assertLotHasRequiredFields(
+  lotNumber: string | null | undefined,
+  entitlementValue: unknown,
+) {
   if (!lotNumber) {
     throw new ConflictError('A Lot/Unit requires a lot number');
   }
-  if (entitlementValue === null || entitlementValue === undefined || Number(entitlementValue) <= 0) {
+  if (
+    entitlementValue === null ||
+    entitlementValue === undefined ||
+    Number(entitlementValue) <= 0
+  ) {
     throw new ConflictError('A Lot/Unit requires a positive Units of Entitlement value');
   }
 }
@@ -180,15 +188,18 @@ export class SpacesService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      const space = await tx.space.create({
-        data: {
-          organisationId,
-          propertyId,
-          ...input,
-          strataClassification: classification,
-          isStrataLot: classification === 'LOT',
-        },
-      });
+      const space = await withPublicReference('LOT', (publicReference) =>
+        tx.space.create({
+          data: {
+            organisationId,
+            propertyId,
+            publicReference,
+            ...input,
+            strataClassification: classification,
+            isStrataLot: classification === 'LOT',
+          },
+        }),
+      );
 
       await recordActivity(tx, {
         organisationId,
@@ -210,7 +221,14 @@ export class SpacesService {
       where: { id: spaceId, organisationId },
       include: {
         property: {
-          select: { id: true, name: true, code: true, isStrataManaged: true, strataStatus: true },
+          select: {
+            id: true,
+            publicReference: true,
+            name: true,
+            code: true,
+            isStrataManaged: true,
+            strataStatus: true,
+          },
         },
       },
     });
@@ -290,7 +308,11 @@ export class SpacesService {
     return this.prisma.$transaction(async (tx) => {
       const space = await tx.space.update({
         where: { id: spaceId },
-        data: { ...input, strataClassification: classification, isStrataLot: classification === 'LOT' },
+        data: {
+          ...input,
+          strataClassification: classification,
+          isStrataLot: classification === 'LOT',
+        },
       });
 
       await recordActivity(tx, {

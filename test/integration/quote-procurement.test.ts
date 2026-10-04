@@ -15,7 +15,10 @@ const validProperty = {
   propertyType: 'MIXED_USE',
 };
 
-async function setupRequest(accessToken: string, overrides: Partial<{ category: string; propertyId: string }> = {}) {
+async function setupRequest(
+  accessToken: string,
+  overrides: Partial<{ category: string; propertyId: string }> = {},
+) {
   let propertyId = overrides.propertyId;
   if (!propertyId) {
     const propertyRes = await request(app)
@@ -27,7 +30,11 @@ async function setupRequest(accessToken: string, overrides: Partial<{ category: 
   const spaceRes = await request(app)
     .post(`/api/v1/properties/${propertyId}/spaces`)
     .set(authHeader(accessToken))
-    .send({ name: 'Unit 1', code: `U-${Date.now()}-${Math.random().toString(36).slice(2)}`, spaceType: 'APARTMENT' });
+    .send({
+      name: 'Unit 1',
+      code: `U-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      spaceType: 'APARTMENT',
+    });
   const requestRes = await request(app)
     .post('/api/v1/maintenance-requests')
     .set(authHeader(accessToken))
@@ -39,7 +46,11 @@ async function setupRequest(accessToken: string, overrides: Partial<{ category: 
       propertyId,
       spaceId: spaceRes.body.id,
     });
-  return { propertyId, spaceId: spaceRes.body.id as string, maintenanceRequestId: requestRes.body.id as string };
+  return {
+    propertyId,
+    spaceId: spaceRes.body.id as string,
+    maintenanceRequestId: requestRes.body.id as string,
+  };
 }
 
 async function createContractor(
@@ -98,7 +109,8 @@ async function createRound(
     .send({
       maintenanceRequestId,
       title: overrides.title ?? 'Fix the switchboard',
-      scopeDescription: overrides.scopeDescription ?? 'Diagnose and repair the tripping switchboard.',
+      scopeDescription:
+        overrides.scopeDescription ?? 'Diagnose and repair the tripping switchboard.',
       contractorIds,
     });
   expect(res.status).toBe(201);
@@ -224,11 +236,7 @@ describe('quote management, procurement & variations (M11)', () => {
   });
 
   describe('award', () => {
-    async function submitQuoteManually(
-      accessToken: string,
-      quoteId: string,
-      amount: number,
-    ) {
+    async function submitQuoteManually(accessToken: string, quoteId: string, amount: number) {
       const res = await request(app)
         .patch(`/api/v1/quotes/${quoteId}/submit`)
         .set(authHeader(accessToken))
@@ -257,10 +265,14 @@ describe('quote management, procurement & variations (M11)', () => {
       expect(awardRes.body.workOrder.contractorId).toBe(c1);
       expect(Number(awardRes.body.workOrder.estimatedCost)).toBe(5200);
 
-      const loserRes = await request(app).get(`/api/v1/quotes/${inv2.quoteId}`).set(authHeader(accessToken));
+      const loserRes = await request(app)
+        .get(`/api/v1/quotes/${inv2.quoteId}`)
+        .set(authHeader(accessToken));
       expect(loserRes.body.status).toBe('NOT_SELECTED');
 
-      const roundRes = await request(app).get(`/api/v1/quote-rounds/${round.id}`).set(authHeader(accessToken));
+      const roundRes = await request(app)
+        .get(`/api/v1/quote-rounds/${round.id}`)
+        .set(authHeader(accessToken));
       expect(roundRes.body.status).toBe('AWARDED');
       expect(roundRes.body.awardedQuoteId).toBe(inv1.quoteId);
     });
@@ -286,7 +298,9 @@ describe('quote management, procurement & variations (M11)', () => {
       expect(awardRes.status).toBe(403);
       expect(awardRes.body.error.details.blockingIssues[0].reason).toBe('MISSING');
 
-      const roundRes = await request(app).get(`/api/v1/quote-rounds/${round.id}`).set(authHeader(accessToken));
+      const roundRes = await request(app)
+        .get(`/api/v1/quote-rounds/${round.id}`)
+        .set(authHeader(accessToken));
       expect(roundRes.body.status).toBe('OPEN');
     });
 

@@ -36,10 +36,10 @@ export const upsertApprovalPolicySchema = z.object({
     .array(policyRuleInputSchema)
     .min(1, 'Add at least one rule')
     .max(20, 'Too many rules')
-    .refine(
-      (rules) => rules.slice(0, -1).every((r) => r.maxAmount !== null),
-      { message: 'Only the highest band may be open-ended', path: ['rules'] },
-    )
+    .refine((rules) => rules.slice(0, -1).every((r) => r.maxAmount !== null), {
+      message: 'Only the highest band may be open-ended',
+      path: ['rules'],
+    })
     .refine((rules) => rules[rules.length - 1]?.maxAmount === null, {
       message: 'The highest band must be open-ended ("and above") — set its amount to blank',
       path: ['rules'],

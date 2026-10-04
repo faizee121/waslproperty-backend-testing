@@ -1,5 +1,10 @@
 import type { PlatformRole, Prisma, PrismaClient } from '@prisma/client';
-import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../../errors/AppError.js';
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  ValidationError,
+} from '../../../errors/AppError.js';
 import type { PaginatedResult } from '../../../lib/pagination.js';
 import { recordPlatformActivity } from '../../../platform/audit.js';
 import {
@@ -9,7 +14,11 @@ import {
   type DataExplorerFieldMeta,
   type DataExplorerModelMeta,
 } from '../../../platform/data-explorer-metadata.js';
-import { canViewUnmaskedPii, maskPiiFields, SECRET_FIELDS } from '../../../platform/privacy-policy.js';
+import {
+  canViewUnmaskedPii,
+  maskPiiFields,
+  SECRET_FIELDS,
+} from '../../../platform/privacy-policy.js';
 import type {
   DataExplorerDeleteInput,
   DataExplorerListQuery,
@@ -26,7 +35,10 @@ interface GenericDelegate {
   delete(args: Record<string, unknown>): Promise<Row>;
 }
 
-function getDelegate(client: PrismaClient | Prisma.TransactionClient, delegateName: string): GenericDelegate {
+function getDelegate(
+  client: PrismaClient | Prisma.TransactionClient,
+  delegateName: string,
+): GenericDelegate {
   // delegateName always comes from our own metadata registry (never client
   // input), so it is always a valid Prisma Client property.
   return (client as unknown as Record<string, GenericDelegate>)[delegateName]!;
@@ -53,7 +65,12 @@ function buildSelect(meta: DataExplorerModelMeta, withRelations: boolean): Row {
 }
 
 function isPrismaCode(err: unknown, code: string): boolean {
-  return typeof err === 'object' && err !== null && 'code' in err && (err as { code: string }).code === code;
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code: string }).code === code
+  );
 }
 
 function pick(row: Row, keys: string[]): Row {
@@ -68,14 +85,22 @@ function pick(row: Row, keys: string[]): Row {
 function toAuditValue(value: unknown): unknown {
   if (value === null || value === undefined) return null;
   if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'object' && 'toString' in value && typeof (value as { toString(): string }).toString === 'function') {
+  if (
+    typeof value === 'object' &&
+    'toString' in value &&
+    typeof (value as { toString(): string }).toString === 'function'
+  ) {
     const ctorName = (value as { constructor?: { name?: string } }).constructor?.name;
     if (ctorName === 'Decimal') return (value as { toString(): string }).toString();
   }
   return value;
 }
 
-function sanitizeRecord(meta: DataExplorerModelMeta, row: Row, capabilities: readonly string[]): Row {
+function sanitizeRecord(
+  meta: DataExplorerModelMeta,
+  row: Row,
+  capabilities: readonly string[],
+): Row {
   const secretFields = SECRET_FIELDS[meta.model];
   let out = row;
   if (secretFields?.length) {
@@ -111,7 +136,10 @@ function buildWhere(meta: DataExplorerModelMeta, query: DataExplorerListQuery): 
       if (!fieldMeta || !['enum', 'boolean', 'string'].includes(fieldMeta.type)) {
         throw new ValidationError(`${key} is not a filterable field on ${meta.model}`);
       }
-      if (fieldMeta.type === 'enum' && (typeof value !== 'string' || !fieldMeta.enumValues?.includes(value))) {
+      if (
+        fieldMeta.type === 'enum' &&
+        (typeof value !== 'string' || !fieldMeta.enumValues?.includes(value))
+      ) {
         throw new ValidationError(`Invalid filter value for ${key}`);
       }
       if (fieldMeta.type === 'boolean' && typeof value !== 'boolean') {
@@ -133,7 +161,8 @@ function coerceFieldValue(fieldMeta: DataExplorerFieldMeta, value: unknown): unk
     case 'string':
     case 'text': {
       if (value === null) return null;
-      if (typeof value !== 'string') throw new ValidationError(`${fieldMeta.name} must be a string`);
+      if (typeof value !== 'string')
+        throw new ValidationError(`${fieldMeta.name} must be a string`);
       return value.trim();
     }
     case 'int': {
@@ -151,24 +180,31 @@ function coerceFieldValue(fieldMeta: DataExplorerFieldMeta, value: unknown): unk
       }
       const s = String(value);
       if (!/^-?\d+(\.\d{1,2})?$/.test(s)) {
-        throw new ValidationError(`${fieldMeta.name} must be a decimal with up to 2 decimal places`);
+        throw new ValidationError(
+          `${fieldMeta.name} must be a decimal with up to 2 decimal places`,
+        );
       }
       return s;
     }
     case 'boolean': {
-      if (typeof value !== 'boolean') throw new ValidationError(`${fieldMeta.name} must be true or false`);
+      if (typeof value !== 'boolean')
+        throw new ValidationError(`${fieldMeta.name} must be true or false`);
       return value;
     }
     case 'datetime': {
       if (value === null) return null;
-      if (typeof value !== 'string') throw new ValidationError(`${fieldMeta.name} must be an ISO date string`);
+      if (typeof value !== 'string')
+        throw new ValidationError(`${fieldMeta.name} must be an ISO date string`);
       const d = new Date(value);
-      if (Number.isNaN(d.getTime())) throw new ValidationError(`${fieldMeta.name} is not a valid date`);
+      if (Number.isNaN(d.getTime()))
+        throw new ValidationError(`${fieldMeta.name} is not a valid date`);
       return d;
     }
     case 'enum': {
       if (typeof value !== 'string' || !fieldMeta.enumValues?.includes(value)) {
-        throw new ValidationError(`${fieldMeta.name} must be one of: ${fieldMeta.enumValues?.join(', ')}`);
+        throw new ValidationError(
+          `${fieldMeta.name} must be one of: ${fieldMeta.enumValues?.join(', ')}`,
+        );
       }
       return value;
     }
@@ -251,7 +287,10 @@ export class BackofficeDataExplorerService {
       };
     });
 
-    const flat = pick(row, meta.fields.map((f) => f.name));
+    const flat = pick(
+      row,
+      meta.fields.map((f) => f.name),
+    );
     return { record: sanitizeRecord(meta, flat, capabilities), relations };
   }
 
@@ -268,7 +307,8 @@ export class BackofficeDataExplorerService {
     const data: Row = {};
     for (const [key, value] of Object.entries(changes)) {
       const fieldMeta = meta.fields.find((f) => f.name === key);
-      if (!fieldMeta) throw new ValidationError(`${key} is not a recognised field on ${meta.model}`);
+      if (!fieldMeta)
+        throw new ValidationError(`${key} is not a recognised field on ${meta.model}`);
       if (!fieldMeta.editable) throw new ForbiddenError(`${key} is not editable on ${meta.model}`);
       if (fieldMeta.piiSensitive && !canViewUnmaskedPii(capabilities)) {
         throw new ForbiddenError(`Editing ${key} requires PII visibility`);
@@ -278,13 +318,20 @@ export class BackofficeDataExplorerService {
 
     const delegate = getDelegate(this.prisma, meta.delegate);
     const changedKeys = Object.keys(data);
-    const existing = await delegate.findUnique({ where: { id }, select: pick(buildSelect(meta, false), changedKeys) });
+    const existing = await delegate.findUnique({
+      where: { id },
+      select: pick(buildSelect(meta, false), changedKeys),
+    });
     if (!existing) throw new NotFoundError(`${meta.label} not found`);
 
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
         const txDelegate = getDelegate(tx, meta.delegate);
-        const result = await txDelegate.update({ where: { id }, data, select: buildSelect(meta, false) });
+        const result = await txDelegate.update({
+          where: { id },
+          data,
+          select: buildSelect(meta, false),
+        });
 
         await recordPlatformActivity(tx, {
           actorEmployeeId: actor.employeeId,
@@ -306,7 +353,8 @@ export class BackofficeDataExplorerService {
 
       return sanitizeRecord(meta, updated, capabilities);
     } catch (err) {
-      if (isPrismaCode(err, 'P2002')) throw new ConflictError('A record with that value already exists');
+      if (isPrismaCode(err, 'P2002'))
+        throw new ConflictError('A record with that value already exists');
       if (isPrismaCode(err, 'P2025')) throw new NotFoundError(`${meta.label} not found`);
       throw err;
     }

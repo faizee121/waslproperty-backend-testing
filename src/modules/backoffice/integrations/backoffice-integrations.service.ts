@@ -18,7 +18,12 @@ export class BackofficeIntegrationsService {
 
   async getChecks(): Promise<HealthCheck[]> {
     const checks: HealthCheck[] = [
-      { name: 'Backend API', category: 'Core service', status: 'operational', context: 'Responding to this request' },
+      {
+        name: 'Backend API',
+        category: 'Core service',
+        status: 'operational',
+        context: 'Responding to this request',
+      },
     ];
 
     try {
@@ -65,7 +70,9 @@ export class BackofficeIntegrationsService {
     });
 
     const waslSignConfigured = Boolean(
-      env.WASLSIGN_API_BASE_URL && env.WASLSIGN_SERVICE_CLIENT_ID && env.WASLSIGN_SERVICE_CLIENT_SECRET,
+      env.WASLSIGN_API_BASE_URL &&
+      env.WASLSIGN_SERVICE_CLIENT_ID &&
+      env.WASLSIGN_SERVICE_CLIENT_SECRET,
     );
     checks.push(
       waslSignConfigured

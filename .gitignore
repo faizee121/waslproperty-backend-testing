@@ -6,3 +6,7 @@ coverage/
 !.env.example
 *.log
 .DS_Store
+
+# tesseract.js's downloaded OCR language model (M15) — fetched to the
+# process's working directory on first use; never a source artifact.
+*.traineddata

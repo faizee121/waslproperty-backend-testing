@@ -52,7 +52,10 @@ describe('Data Explorer model metadata — security invariants', () => {
     for (const meta of Object.values(DATA_EXPLORER_MODELS)) {
       for (const field of meta.fields) {
         if (field.type === 'json') {
-          expect(field.editable, `${meta.model}.${field.name} is json and must not be editable`).toBe(false);
+          expect(
+            field.editable,
+            `${meta.model}.${field.name} is json and must not be editable`,
+          ).toBe(false);
         }
       }
     }

@@ -63,7 +63,12 @@ describe('properties', () => {
 
   it('allows a MEMBER to list properties but rejects a MEMBER creating one (RBAC)', async () => {
     const { organisationId, userId } = await registerTestUser(app);
-    const memberToken = signAccessToken({ sub: userId, sessionType: 'CUSTOMER', organisationId, orgRole: 'MEMBER' });
+    const memberToken = signAccessToken({
+      sub: userId,
+      sessionType: 'CUSTOMER',
+      organisationId,
+      orgRole: 'MEMBER',
+    });
 
     const listRes = await request(app).get('/api/v1/properties').set(authHeader(memberToken));
     expect(listRes.status).toBe(200);

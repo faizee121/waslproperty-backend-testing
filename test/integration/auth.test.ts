@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { resetDb, testPrisma } from '../helpers/db.js';
 import { authHeader, createPlainUser } from '../helpers/auth.js';
+import { buildPublicReference } from '../../src/lib/public-reference.js';
 
 const app = createApp();
 
@@ -228,6 +229,7 @@ describe('PATCH /organisations/me — currency', () => {
     const property = await testPrisma.property.create({
       data: {
         organisationId,
+        publicReference: buildPublicReference('PROP'),
         name: 'Currency Test Property',
         code: `CUR-${Date.now()}`,
         addressLine1: '1 St',
@@ -239,6 +241,7 @@ describe('PATCH /organisations/me — currency', () => {
     const request_ = await testPrisma.maintenanceRequest.create({
       data: {
         organisationId,
+        publicReference: buildPublicReference('MR'),
         propertyId: property.id,
         title: 'Leak',
         description: 'test',
@@ -249,7 +252,12 @@ describe('PATCH /organisations/me — currency', () => {
     const workOrderRes = await request(app)
       .post('/api/v1/work-orders')
       .set('Authorization', `Bearer ${token}`)
-      .send({ maintenanceRequestId: request_.id, title: 'Fix leak', description: 'test', priority: 'LOW' });
+      .send({
+        maintenanceRequestId: request_.id,
+        title: 'Fix leak',
+        description: 'test',
+        priority: 'LOW',
+      });
     expect(workOrderRes.status).toBe(201);
     expect(workOrderRes.body.currencyCode).toBe('AUD');
 
@@ -259,7 +267,9 @@ describe('PATCH /organisations/me — currency', () => {
       .send({ currencyCode: 'EUR' });
     expect(patchRes.status).toBe(200);
 
-    const workOrderAfter = await testPrisma.workOrder.findUniqueOrThrow({ where: { id: workOrderRes.body.id } });
+    const workOrderAfter = await testPrisma.workOrder.findUniqueOrThrow({
+      where: { id: workOrderRes.body.id },
+    });
     expect(workOrderAfter.currencyCode).toBe('AUD');
   });
 });

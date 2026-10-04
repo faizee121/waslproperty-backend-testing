@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticate } from '../../middlewares/auth.middleware.js';
 import { requireCapability } from '../../middlewares/authorize.middleware.js';
 import { fromMaintenanceRequestParam } from '../../middlewares/resolvePropertyId.js';
+import { resolveMaintenanceRequestReference } from '../../middlewares/resolvePublicReference.js';
 import { asyncHandler } from '../../middlewares/asyncHandler.js';
 import {
   listMaintenanceAttachments,
@@ -25,18 +26,36 @@ maintenanceRouter.use(authenticate);
 // MaintenanceService — see its list()/getById() for the full resolution.
 maintenanceRouter.get('/', asyncHandler(listMaintenanceRequests));
 maintenanceRouter.post('/', asyncHandler(createMaintenanceRequest));
-maintenanceRouter.get('/:id', asyncHandler(getMaintenanceRequest));
+maintenanceRouter.get(
+  '/:id',
+  resolveMaintenanceRequestReference('id'),
+  asyncHandler(getMaintenanceRequest),
+);
 maintenanceRouter.patch(
   '/:id/status',
+  resolveMaintenanceRequestReference('id'),
   requireCapability('maintenance.manage', fromMaintenanceRequestParam('id')),
   asyncHandler(updateMaintenanceRequestStatus),
 );
 maintenanceRouter.patch(
   '/:id',
+  resolveMaintenanceRequestReference('id'),
   requireCapability('maintenance.manage', fromMaintenanceRequestParam('id')),
   asyncHandler(updateMaintenanceRequest),
 );
 
-maintenanceRouter.post('/:id/attachments/presign', asyncHandler(presignMaintenanceAttachments));
-maintenanceRouter.post('/:id/attachments', asyncHandler(registerMaintenanceAttachments));
-maintenanceRouter.get('/:id/attachments', asyncHandler(listMaintenanceAttachments));
+maintenanceRouter.post(
+  '/:id/attachments/presign',
+  resolveMaintenanceRequestReference('id'),
+  asyncHandler(presignMaintenanceAttachments),
+);
+maintenanceRouter.post(
+  '/:id/attachments',
+  resolveMaintenanceRequestReference('id'),
+  asyncHandler(registerMaintenanceAttachments),
+);
+maintenanceRouter.get(
+  '/:id/attachments',
+  resolveMaintenanceRequestReference('id'),
+  asyncHandler(listMaintenanceAttachments),
+);

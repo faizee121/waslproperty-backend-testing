@@ -113,6 +113,9 @@ export async function registerVariationAttachment(req: Request, res: Response) {
 
 export async function listVariationAttachments(req: Request, res: Response) {
   const auth = requireAuth(req);
-  const result = await variationsService.listAttachments(auth.organisationId, req.params.id as string);
+  const result = await variationsService.listAttachments(
+    auth.organisationId,
+    req.params.id as string,
+  );
   res.json(result);
 }

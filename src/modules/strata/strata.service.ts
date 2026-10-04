@@ -1,8 +1,13 @@
 import type { Prisma, PrismaClient, SpaceStrataClassification, StrataStatus } from '@prisma/client';
 import { ConflictError, NotFoundError } from '../../errors/AppError.js';
+import { withPublicReference } from '../../lib/public-reference.js';
 import { recordActivity } from '../activity/activity.js';
 import { assertOrganisationFeature } from '../organisations/organisation-features.js';
-import { calculateEntitlementShare, calculateTotalUoe, reconcileUoe } from './strata.calculations.js';
+import {
+  calculateEntitlementShare,
+  calculateTotalUoe,
+  reconcileUoe,
+} from './strata.calculations.js';
 import type {
   BulkSetLotsInput,
   ClassifySpacesInput,
@@ -151,7 +156,12 @@ export class StrataService {
    * SpacesService checks before allowing isStrataLot on any of this
    * property's spaces.
    */
-  async enable(organisationId: string, actorUserId: string, propertyId: string, input: EnableStrataInput) {
+  async enable(
+    organisationId: string,
+    actorUserId: string,
+    propertyId: string,
+    input: EnableStrataInput,
+  ) {
     await assertOrganisationFeature(this.prisma, organisationId, 'STRATA_MANAGEMENT');
     const property = await this.getOwnedProperty(organisationId, propertyId);
     const isFirstEnable = property.strataStatus === 'NOT_ENABLED';
@@ -194,7 +204,9 @@ export class StrataService {
     await assertOrganisationFeature(this.prisma, organisationId, 'STRATA_MANAGEMENT');
     const property = await this.getOwnedProperty(organisationId, propertyId);
     if (property.strataStatus === 'NOT_ENABLED') {
-      throw new ConflictError('Enable strata management for this property before configuring its plan');
+      throw new ConflictError(
+        'Enable strata management for this property before configuring its plan',
+      );
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -233,7 +245,9 @@ export class StrataService {
     await assertOrganisationFeature(this.prisma, organisationId, 'STRATA_MANAGEMENT');
     const property = await this.getOwnedProperty(organisationId, propertyId);
     if (property.strataStatus === 'NOT_ENABLED') {
-      throw new ConflictError('Enable strata management for this property before configuring its lots');
+      throw new ConflictError(
+        'Enable strata management for this property before configuring its lots',
+      );
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -301,19 +315,22 @@ export class StrataService {
       throw new ConflictError(`A space with code "${entry.code}" already exists on this property`);
     }
 
-    const space = await tx.space.create({
-      data: {
-        organisationId,
-        propertyId,
-        name: entry.name,
-        code: entry.code,
-        spaceType: entry.spaceType,
-        isStrataLot: true,
-        strataClassification: 'LOT',
-        lotNumber: entry.lotNumber,
-        entitlementValue: entry.unitsOfEntitlement,
-      },
-    });
+    const space = await withPublicReference('LOT', (publicReference) =>
+      tx.space.create({
+        data: {
+          organisationId,
+          propertyId,
+          publicReference,
+          name: entry.name,
+          code: entry.code,
+          spaceType: entry.spaceType,
+          isStrataLot: true,
+          strataClassification: 'LOT',
+          lotNumber: entry.lotNumber,
+          entitlementValue: entry.unitsOfEntitlement,
+        },
+      }),
+    );
 
     await recordActivity(tx, {
       organisationId,
@@ -349,7 +366,9 @@ export class StrataService {
     await assertOrganisationFeature(this.prisma, organisationId, 'STRATA_MANAGEMENT');
     const property = await this.getOwnedProperty(organisationId, propertyId);
     if (property.strataStatus === 'NOT_ENABLED') {
-      throw new ConflictError('Enable strata management for this property before classifying its spaces');
+      throw new ConflictError(
+        'Enable strata management for this property before classifying its spaces',
+      );
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -482,7 +501,9 @@ export class StrataService {
     });
 
     const lots = spaces.filter((space) => space.strataClassification === 'LOT');
-    const commonProperty = spaces.filter((space) => space.strataClassification === 'COMMON_PROPERTY');
+    const commonProperty = spaces.filter(
+      (space) => space.strataClassification === 'COMMON_PROPERTY',
+    );
     const unclassified = spaces.filter((space) => space.strataClassification === 'UNCLASSIFIED');
 
     const totalUnitsOfEntitlement = calculateTotalUoe(

@@ -17,4 +17,8 @@ platformAuthRouter.post('/login', asyncHandler(platformLogin));
 platformAuthRouter.post('/refresh', asyncHandler(platformRefresh));
 platformAuthRouter.post('/logout', asyncHandler(platformLogout));
 platformAuthRouter.get('/me', authenticatePlatform, asyncHandler(getCurrentPlatformUser));
-platformAuthRouter.post('/change-password', authenticatePlatform, asyncHandler(changePlatformPassword));
+platformAuthRouter.post(
+  '/change-password',
+  authenticatePlatform,
+  asyncHandler(changePlatformPassword),
+);

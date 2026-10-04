@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { recordActivity } from '../activity/activity.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '../../errors/AppError.js';
 import { env } from '../../config/env.js';
+import { withPublicReference } from '../../lib/public-reference.js';
 import { logger } from '../../lib/logger.js';
 import { emailService } from '../../lib/email.js';
 import { generateRfqToken, hashRfqToken, rfqTokenExpiresAt } from '../../lib/tokens.js';
@@ -18,9 +19,9 @@ import type {
 } from './quote-rounds.schemas.js';
 
 const roundInclude = {
-  property: { select: { id: true, name: true } },
-  space: { select: { id: true, name: true } },
-  maintenanceRequest: { select: { id: true, title: true } },
+  property: { select: { id: true, publicReference: true, name: true } },
+  space: { select: { id: true, publicReference: true, name: true } },
+  maintenanceRequest: { select: { id: true, publicReference: true, title: true } },
   createdBy: { select: { id: true, firstName: true, lastName: true } },
   invitations: {
     include: {
@@ -98,25 +99,28 @@ export class QuoteRoundsService {
       ).currencyCode;
 
     const round = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.quoteRound.create({
-        data: {
-          organisationId,
-          propertyId: request.propertyId,
-          spaceId: request.spaceId,
-          maintenanceRequestId: request.id,
-          category: request.category,
-          title: input.title,
-          scopeDescription: input.scopeDescription,
-          priority: request.priority,
-          accessInstructions: input.accessInstructions,
-          desiredStartAt: input.desiredStartAt,
-          dueAt: input.dueAt,
-          currencyCode,
-          status: 'OPEN',
-          createdByUserId: actorUserId,
-        },
-        include: roundInclude,
-      });
+      const created = await withPublicReference('RFQ', (publicReference) =>
+        tx.quoteRound.create({
+          data: {
+            organisationId,
+            publicReference,
+            propertyId: request.propertyId,
+            spaceId: request.spaceId,
+            maintenanceRequestId: request.id,
+            category: request.category,
+            title: input.title,
+            scopeDescription: input.scopeDescription,
+            priority: request.priority,
+            accessInstructions: input.accessInstructions,
+            desiredStartAt: input.desiredStartAt,
+            dueAt: input.dueAt,
+            currencyCode,
+            status: 'OPEN',
+            createdByUserId: actorUserId,
+          },
+          include: roundInclude,
+        }),
+      );
 
       await tx.maintenanceRequest.update({
         where: { id: request.id },
@@ -323,7 +327,11 @@ export class QuoteRoundsService {
     const results = await Promise.all(
       contractors.map(async (contractor) => ({
         contractor,
-        eligibility: await this.eligibility.evaluate(organisationId, contractor.id, request.category),
+        eligibility: await this.eligibility.evaluate(
+          organisationId,
+          contractor.id,
+          request.category,
+        ),
       })),
     );
 
@@ -333,7 +341,9 @@ export class QuoteRoundsService {
   async cancel(organisationId: string, actorUserId: string, quoteRoundId: string, reason?: string) {
     const round = await this.getOwnedRound(organisationId, quoteRoundId);
     if (round.status === 'AWARDED' || round.status === 'CANCELLED') {
-      throw new ConflictError(`Cannot cancel a round that is already ${round.status.toLowerCase()}`);
+      throw new ConflictError(
+        `Cannot cancel a round that is already ${round.status.toLowerCase()}`,
+      );
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -432,24 +442,27 @@ export class QuoteRoundsService {
         throw new ConflictError('This round has already been awarded');
       }
 
-      const workOrder = await tx.workOrder.create({
-        data: {
-          organisationId,
-          propertyId: round.propertyId,
-          spaceId: round.spaceId,
-          maintenanceRequestId: round.maintenanceRequestId,
-          title: round.title,
-          description: round.scopeDescription,
-          priority: round.priority,
-          status: 'DRAFT',
-          createdByUserId: actorUserId,
-          currencyCode: quote.currencyCode,
-          estimatedCost: quote.amount,
-          contractorId: quote.contractorId,
-          selectedQuoteId: quote.id,
-          quoteRoundId: round.id,
-        },
-      });
+      const workOrder = await withPublicReference('WO', (publicReference) =>
+        tx.workOrder.create({
+          data: {
+            organisationId,
+            publicReference,
+            propertyId: round.propertyId,
+            spaceId: round.spaceId,
+            maintenanceRequestId: round.maintenanceRequestId,
+            title: round.title,
+            description: round.scopeDescription,
+            priority: round.priority,
+            status: 'DRAFT',
+            createdByUserId: actorUserId,
+            currencyCode: quote.currencyCode,
+            estimatedCost: quote.amount,
+            contractorId: quote.contractorId,
+            selectedQuoteId: quote.id,
+            quoteRoundId: round.id,
+          },
+        }),
+      );
 
       const awardedQuote = await tx.contractorQuote.update({
         where: { id: quote.id },
@@ -640,7 +653,9 @@ export class QuoteRoundsService {
     const invitation = await this.getInvitationByRawToken(rawToken);
     const maxBytes = env.CREDENTIAL_DOCUMENT_MAX_SIZE_MB * 1024 * 1024;
     if (input.fileSize > maxBytes) {
-      throw new ConflictError(`The document must be ${env.CREDENTIAL_DOCUMENT_MAX_SIZE_MB} MB or smaller`);
+      throw new ConflictError(
+        `The document must be ${env.CREDENTIAL_DOCUMENT_MAX_SIZE_MB} MB or smaller`,
+      );
     }
     const extension = ATTACHMENT_EXTENSION[input.contentType];
     const storageKey = `organisations/${invitation.organisationId}/quotes/${invitation.quoteId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
@@ -682,7 +697,9 @@ export class QuoteRoundsService {
     if (!quote) throw new NotFoundError('Quote not found');
     const maxBytes = env.CREDENTIAL_DOCUMENT_MAX_SIZE_MB * 1024 * 1024;
     if (input.fileSize > maxBytes) {
-      throw new ConflictError(`The document must be ${env.CREDENTIAL_DOCUMENT_MAX_SIZE_MB} MB or smaller`);
+      throw new ConflictError(
+        `The document must be ${env.CREDENTIAL_DOCUMENT_MAX_SIZE_MB} MB or smaller`,
+      );
     }
     const extension = ATTACHMENT_EXTENSION[input.contentType];
     const storageKey = `organisations/${organisationId}/quotes/${quoteId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;

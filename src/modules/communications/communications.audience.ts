@@ -206,7 +206,9 @@ export async function assertAudienceWithinScope(
   if (accessible === 'ALL') return;
 
   if (criteria.scope === 'ORGANISATION') {
-    throw new ForbiddenError('An organisation-wide announcement requires organisation staff access');
+    throw new ForbiddenError(
+      'An organisation-wide announcement requires organisation staff access',
+    );
   }
   if (criteria.scope === 'PROPERTY') {
     const outOfScope = (criteria.propertyIds ?? []).some((id) => !accessible.includes(id));

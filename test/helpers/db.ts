@@ -11,9 +11,18 @@ export async function resetDb() {
   await testPrisma.$transaction([
     testPrisma.workOrder.updateMany({ data: { selectedQuoteId: null } }),
     testPrisma.quoteRound.updateMany({ data: { awardedQuoteId: null } }),
+    // PropertyDocument.createdPropertyId <-> Property is the same kind of
+    // circular pair — a confirmed document points at the property it
+    // created, so the link is broken before either side is deleted.
+    testPrisma.propertyDocument.updateMany({ data: { createdPropertyId: null } }),
   ]);
 
   await testPrisma.$transaction([
+    testPrisma.documentAnalysis.deleteMany(),
+    testPrisma.propertyDocument.deleteMany(),
+    testPrisma.aiMessage.deleteMany(),
+    testPrisma.aiAuditEvent.deleteMany(),
+    testPrisma.aiConversation.deleteMany(),
     testPrisma.activityEvent.deleteMany(),
     testPrisma.waslSignWebhookEvent.deleteMany(),
     testPrisma.notification.deleteMany(),

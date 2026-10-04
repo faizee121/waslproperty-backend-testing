@@ -79,7 +79,9 @@ const classifyAsCommonPropertySchema = z.object({
 
 export const classifySpacesSchema = z.object({
   entries: z
-    .array(z.discriminatedUnion('classification', [classifyAsLotSchema, classifyAsCommonPropertySchema]))
+    .array(
+      z.discriminatedUnion('classification', [classifyAsLotSchema, classifyAsCommonPropertySchema]),
+    )
     .min(1),
 });
 export type ClassifySpacesInput = z.infer<typeof classifySpacesSchema>;

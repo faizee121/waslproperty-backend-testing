@@ -622,7 +622,9 @@ describe('contractor quotes + workflow modes', () => {
       const { accessToken } = await registerTestUser(app);
       const { workOrderId, quoteId } = await setupWorkOrderWithContractor(accessToken, 1000);
 
-      const workOrder = await testPrisma.workOrder.findUniqueOrThrow({ where: { id: workOrderId } });
+      const workOrder = await testPrisma.workOrder.findUniqueOrThrow({
+        where: { id: workOrderId },
+      });
       const quote = await testPrisma.contractorQuote.findUniqueOrThrow({ where: { id: quoteId } });
       expect(workOrder.currencyCode).toBe('AUD');
       expect(quote.currencyCode).toBe('AUD');
@@ -630,10 +632,15 @@ describe('contractor quotes + workflow modes', () => {
 
     it('inherits a non-default organisation currency', async () => {
       const { accessToken, organisationId } = await registerTestUser(app);
-      await testPrisma.organisation.update({ where: { id: organisationId }, data: { currencyCode: 'GBP' } });
+      await testPrisma.organisation.update({
+        where: { id: organisationId },
+        data: { currencyCode: 'GBP' },
+      });
 
       const { workOrderId, quoteId } = await setupWorkOrderWithContractor(accessToken, 1000);
-      const workOrder = await testPrisma.workOrder.findUniqueOrThrow({ where: { id: workOrderId } });
+      const workOrder = await testPrisma.workOrder.findUniqueOrThrow({
+        where: { id: workOrderId },
+      });
       const quote = await testPrisma.contractorQuote.findUniqueOrThrow({ where: { id: quoteId } });
       expect(workOrder.currencyCode).toBe('GBP');
       expect(quote.currencyCode).toBe('GBP');
@@ -652,22 +659,28 @@ describe('contractor quotes + workflow modes', () => {
       const workOrderRes = await request(app)
         .post('/api/v1/work-orders')
         .set(authHeader(accessToken))
-        .send({ maintenanceRequestId: requestRes.body.id, title: 'Repair', description: 'test', priority: 'LOW' });
+        .send({
+          maintenanceRequestId: requestRes.body.id,
+          title: 'Repair',
+          description: 'test',
+          priority: 'LOW',
+        });
       const contractorRes = await request(app)
         .post('/api/v1/contractors')
         .set(authHeader(accessToken))
-        .send({ name: 'Overseas Contractor', email: `overseas+${Date.now()}@example.com`, tradeTypes: ['HVAC'] });
-
-      const quoteRes = await request(app)
-        .post('/api/v1/quotes')
-        .set(authHeader(accessToken))
         .send({
-          workOrderId: workOrderRes.body.id,
-          contractorId: contractorRes.body.id,
-          amount: 500,
-          currencyCode: 'usd',
-          description: 'test',
+          name: 'Overseas Contractor',
+          email: `overseas+${Date.now()}@example.com`,
+          tradeTypes: ['HVAC'],
         });
+
+      const quoteRes = await request(app).post('/api/v1/quotes').set(authHeader(accessToken)).send({
+        workOrderId: workOrderRes.body.id,
+        contractorId: contractorRes.body.id,
+        amount: 500,
+        currencyCode: 'usd',
+        description: 'test',
+      });
       expect(quoteRes.status).toBe(201);
       expect(quoteRes.body.currencyCode).toBe('USD');
     });
@@ -685,22 +698,28 @@ describe('contractor quotes + workflow modes', () => {
       const workOrderRes = await request(app)
         .post('/api/v1/work-orders')
         .set(authHeader(accessToken))
-        .send({ maintenanceRequestId: requestRes.body.id, title: 'Repair', description: 'test', priority: 'LOW' });
+        .send({
+          maintenanceRequestId: requestRes.body.id,
+          title: 'Repair',
+          description: 'test',
+          priority: 'LOW',
+        });
       const contractorRes = await request(app)
         .post('/api/v1/contractors')
         .set(authHeader(accessToken))
-        .send({ name: 'Bad Currency Co', email: `badcurrency+${Date.now()}@example.com`, tradeTypes: ['HVAC'] });
-
-      const res = await request(app)
-        .post('/api/v1/quotes')
-        .set(authHeader(accessToken))
         .send({
-          workOrderId: workOrderRes.body.id,
-          contractorId: contractorRes.body.id,
-          amount: 500,
-          currencyCode: 'NOTREAL',
-          description: 'test',
+          name: 'Bad Currency Co',
+          email: `badcurrency+${Date.now()}@example.com`,
+          tradeTypes: ['HVAC'],
         });
+
+      const res = await request(app).post('/api/v1/quotes').set(authHeader(accessToken)).send({
+        workOrderId: workOrderRes.body.id,
+        contractorId: contractorRes.body.id,
+        amount: 500,
+        currencyCode: 'NOTREAL',
+        description: 'test',
+      });
       expect(res.status).toBe(422);
     });
 
@@ -713,7 +732,9 @@ describe('contractor quotes + workflow modes', () => {
         .set(authHeader(accessToken))
         .send({ currencyCode: 'EUR' });
 
-      const workOrder = await testPrisma.workOrder.findUniqueOrThrow({ where: { id: workOrderId } });
+      const workOrder = await testPrisma.workOrder.findUniqueOrThrow({
+        where: { id: workOrderId },
+      });
       const quote = await testPrisma.contractorQuote.findUniqueOrThrow({ where: { id: quoteId } });
       expect(workOrder.currencyCode).toBe('AUD');
       expect(quote.currencyCode).toBe('AUD');
@@ -722,7 +743,11 @@ describe('contractor quotes + workflow modes', () => {
       const contractorRes = await request(app)
         .post('/api/v1/contractors')
         .set(authHeader(accessToken))
-        .send({ name: 'Post-Change Co', email: `postchange+${Date.now()}@example.com`, tradeTypes: ['HVAC'] });
+        .send({
+          name: 'Post-Change Co',
+          email: `postchange+${Date.now()}@example.com`,
+          tradeTypes: ['HVAC'],
+        });
       const newQuoteRes = await request(app)
         .post('/api/v1/quotes')
         .set(authHeader(accessToken))

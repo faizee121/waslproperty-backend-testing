@@ -2,11 +2,19 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { resetDb, testPrisma } from '../helpers/db.js';
-import { authHeader, createPlainUser, registerTestUser, residentAccessToken } from '../helpers/auth.js';
+import {
+  authHeader,
+  createPlainUser,
+  registerTestUser,
+  residentAccessToken,
+} from '../helpers/auth.js';
 
 const app = createApp();
 
-async function createProperty(accessToken: string, overrides: Partial<{ name: string; code: string }> = {}) {
+async function createProperty(
+  accessToken: string,
+  overrides: Partial<{ name: string; code: string }> = {},
+) {
   const res = await request(app)
     .post('/api/v1/properties')
     .set(authHeader(accessToken))
@@ -80,7 +88,12 @@ describe('membership management', () => {
       const created = await request(app)
         .post(`/api/v1/properties/${propertyId}/memberships`)
         .set(authHeader(accessToken))
-        .send({ email: `dup+${Date.now()}@example.com`, firstName: 'A', lastName: 'B', role: 'TENANT' });
+        .send({
+          email: `dup+${Date.now()}@example.com`,
+          firstName: 'A',
+          lastName: 'B',
+          role: 'TENANT',
+        });
 
       const dupe = await request(app)
         .post(`/api/v1/properties/${propertyId}/memberships/assign`)
@@ -131,7 +144,12 @@ describe('membership management', () => {
       const membership = await request(app)
         .post(`/api/v1/properties/${propertyId}/memberships`)
         .set(authHeader(accessToken))
-        .send({ email: `x+${Date.now()}@example.com`, firstName: 'A', lastName: 'B', role: 'TENANT' });
+        .send({
+          email: `x+${Date.now()}@example.com`,
+          firstName: 'A',
+          lastName: 'B',
+          role: 'TENANT',
+        });
 
       const res = await request(app)
         .patch(`/api/v1/people/memberships/${membership.body.id}`)
@@ -151,9 +169,17 @@ describe('membership management', () => {
       const membership = await request(app)
         .post(`/api/v1/properties/${propertyId}/memberships`)
         .set(authHeader(accessToken))
-        .send({ email: resident.email, firstName: 'Resi', lastName: 'Dent', role: 'TENANT', spaceId });
+        .send({
+          email: resident.email,
+          firstName: 'Resi',
+          lastName: 'Dent',
+          role: 'TENANT',
+          spaceId,
+        });
 
-      const contact = await testPrisma.propertyContact.findFirst({ where: { email: resident.email } });
+      const contact = await testPrisma.propertyContact.findFirst({
+        where: { email: resident.email },
+      });
       const residentToken = residentAccessToken(resident.userId, organisationId, contact!.id);
 
       // Before ending: resident sees the membership and can report an issue.
@@ -232,14 +258,18 @@ describe('membership management', () => {
         .set(authHeader(accessToken))
         .send({ contactId: membershipA.body.contactId, role: 'OWNER' });
 
-      const contact = await testPrisma.propertyContact.findFirst({ where: { email: resident.email } });
+      const contact = await testPrisma.propertyContact.findFirst({
+        where: { email: resident.email },
+      });
       const residentToken = residentAccessToken(resident.userId, organisationId, contact!.id);
 
       await request(app)
         .post(`/api/v1/people/memberships/${membershipA.body.id}/end`)
         .set(authHeader(accessToken));
 
-      const memberships = await request(app).get('/api/v1/people/me').set(authHeader(residentToken));
+      const memberships = await request(app)
+        .get('/api/v1/people/me')
+        .set(authHeader(residentToken));
       expect(memberships.body.items).toHaveLength(1);
       expect(memberships.body.items[0].property.name).toBe('Property B');
       expect(memberships.body.items[0].role).toBe('OWNER');
@@ -251,7 +281,12 @@ describe('membership management', () => {
       const membership = await request(app)
         .post(`/api/v1/properties/${propertyId}/memberships`)
         .set(authHeader(accessToken))
-        .send({ email: `once+${Date.now()}@example.com`, firstName: 'A', lastName: 'B', role: 'TENANT' });
+        .send({
+          email: `once+${Date.now()}@example.com`,
+          firstName: 'A',
+          lastName: 'B',
+          role: 'TENANT',
+        });
 
       await request(app)
         .post(`/api/v1/people/memberships/${membership.body.id}/end`)

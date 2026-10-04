@@ -65,6 +65,18 @@ export const CAPABILITIES = [
    * capability grant here never bypasses that jurisdiction check. */
   'strata.view',
   'strata.manage',
+  /** Use the Wasl AI workspace and contextual "Investigate"/"Analyse with
+   * Wasl AI" entry points — see the M14 milestone. Deliberately separate
+   * from every other capability: holding e.g. maintenance.view never
+   * implies ai.use, and ai.use never grants access to data the holder
+   * couldn't otherwise see — every AI tool call still independently
+   * re-checks the specific capability its underlying domain data requires
+   * (see src/modules/ai/gateway/tool-gateway.ts). This capability gates
+   * only "is this user allowed to use the assistant at all", one of three
+   * ANDed conditions alongside the platform AI_ENABLED env var and the
+   * organisation's own aiEnabled toggle — see AiService.isAiAvailableForUser.
+   */
+  'ai.use',
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -76,15 +88,38 @@ export function isCapability(value: string): value is Capability {
 /** Functional groups for the Roles & Permissions editor UI — display only,
  * not consulted by any authorization check. */
 export const CAPABILITY_GROUPS: Array<{ label: string; capabilities: Capability[] }> = [
-  { label: 'Properties & Spaces', capabilities: ['property.view', 'property.manage', 'spaces.view', 'spaces.manage'] },
+  {
+    label: 'Properties & Spaces',
+    capabilities: ['property.view', 'property.manage', 'spaces.view', 'spaces.manage'],
+  },
   { label: 'People', capabilities: ['people.view', 'people.manage'] },
   { label: 'Maintenance', capabilities: ['maintenance.view', 'maintenance.manage'] },
   { label: 'Work Orders', capabilities: ['work_orders.view', 'work_orders.manage'] },
-  { label: 'Contractors & Quotes', capabilities: ['contractors.view', 'contractors.manage', 'quotes.view', 'quotes.manage', 'quotes.approve'] },
-  { label: 'Contractor Compliance', capabilities: ['contractor_compliance.view', 'contractor_compliance.manage', 'contractor_compliance.verify'] },
-  { label: 'Communications', capabilities: ['communications.view', 'communications.send', 'communications.manage'] },
+  {
+    label: 'Contractors & Quotes',
+    capabilities: [
+      'contractors.view',
+      'contractors.manage',
+      'quotes.view',
+      'quotes.manage',
+      'quotes.approve',
+    ],
+  },
+  {
+    label: 'Contractor Compliance',
+    capabilities: [
+      'contractor_compliance.view',
+      'contractor_compliance.manage',
+      'contractor_compliance.verify',
+    ],
+  },
+  {
+    label: 'Communications',
+    capabilities: ['communications.view', 'communications.send', 'communications.manage'],
+  },
   { label: 'Visibility', capabilities: ['analytics.view', 'activity.view'] },
   { label: 'Strata', capabilities: ['strata.view', 'strata.manage'] },
+  { label: 'Wasl AI', capabilities: ['ai.use'] },
 ];
 
 /**
@@ -128,6 +163,7 @@ export const DEFAULT_ROLE_CAPABILITIES: Record<PropertyRole, Capability[]> = {
     'analytics.view',
     'activity.view',
     'strata.view',
+    'ai.use',
   ],
   FACILITY_MANAGER: [
     'property.view',
@@ -142,6 +178,7 @@ export const DEFAULT_ROLE_CAPABILITIES: Record<PropertyRole, Capability[]> = {
     'communications.view',
     'analytics.view',
     'activity.view',
+    'ai.use',
   ],
   AGENT: [
     'property.view',

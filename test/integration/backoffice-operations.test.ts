@@ -4,6 +4,7 @@ import { createApp } from '../../src/app.js';
 import { env } from '../../src/config/env.js';
 import { resetDb, testPrisma } from '../helpers/db.js';
 import { authHeader, createPlatformUser, registerTestUser } from '../helpers/auth.js';
+import { buildPublicReference } from '../../src/lib/public-reference.js';
 
 const app = createApp();
 
@@ -66,7 +67,9 @@ describe('backoffice operational modules', () => {
       const { username, password } = await createPlatformUser({ role: 'PLATFORM_ADMIN' });
       const token = await platformLogin(username, password);
 
-      const res = await request(app).get('/api/v1/backoffice/platform-users').set(authHeader(token));
+      const res = await request(app)
+        .get('/api/v1/backoffice/platform-users')
+        .set(authHeader(token));
       expect(res.status).toBe(403);
     });
   });
@@ -134,7 +137,9 @@ describe('backoffice operational modules', () => {
         .query({ q: unique })
         .set(authHeader(token));
       expect(res.status).toBe(200);
-      const org = res.body.items.find((r: { entityType: string }) => r.entityType === 'Organisation');
+      const org = res.body.items.find(
+        (r: { entityType: string }) => r.entityType === 'Organisation',
+      );
       expect(org.label).toContain(unique);
     });
   });
@@ -158,7 +163,9 @@ describe('backoffice operational modules', () => {
       const token = await platformLogin(username, password);
       const { userId } = await registerTestUser(app, { organisationName: 'Trace Org' });
 
-      const res = await request(app).get(`/api/v1/backoffice/users/${userId}`).set(authHeader(token));
+      const res = await request(app)
+        .get(`/api/v1/backoffice/users/${userId}`)
+        .set(authHeader(token));
       expect(res.status).toBe(200);
       expect(res.body.staffOrganisations).toHaveLength(1);
       expect(res.body.staffOrganisations[0].organisation.name).toBe('Trace Org');
@@ -185,6 +192,7 @@ describe('backoffice operational modules', () => {
       const communication = await testPrisma.communication.create({
         data: {
           organisationId,
+          publicReference: buildPublicReference('COM'),
           title: 'Retry Test Announcement',
           body: 'Body',
           channels: ['EMAIL'],
@@ -294,21 +302,36 @@ describe('backoffice operational modules', () => {
       const first = await request(app)
         .post('/api/v1/backoffice/platform-users')
         .set(authHeader(token))
-        .send({ firstName: 'A', lastName: 'One', username: dupeUsername, role: 'PLATFORM_SUPPORT', reason: 'test' });
+        .send({
+          firstName: 'A',
+          lastName: 'One',
+          username: dupeUsername,
+          role: 'PLATFORM_SUPPORT',
+          reason: 'test',
+        });
       expect(first.status).toBe(201);
 
       const second = await request(app)
         .post('/api/v1/backoffice/platform-users')
         .set(authHeader(token))
-        .send({ firstName: 'B', lastName: 'Two', username: dupeUsername, role: 'PLATFORM_SUPPORT', reason: 'test' });
+        .send({
+          firstName: 'B',
+          lastName: 'Two',
+          username: dupeUsername,
+          role: 'PLATFORM_SUPPORT',
+          reason: 'test',
+        });
       expect(second.status).toBe(409);
     });
 
-    it('lets a Super Admin reset another platform user\'s password to a new generated one that actually logs in', async () => {
+    it("lets a Super Admin reset another platform user's password to a new generated one that actually logs in", async () => {
       const { username: adminUsername, password: adminPassword } = await createPlatformUser();
       const token = await platformLogin(adminUsername, adminPassword);
-      const { username: granteeUsername, password: originalPassword, employeeId } =
-        await createPlatformUser({ role: 'PLATFORM_SUPPORT' });
+      const {
+        username: granteeUsername,
+        password: originalPassword,
+        employeeId,
+      } = await createPlatformUser({ role: 'PLATFORM_SUPPORT' });
 
       const res = await request(app)
         .post(`/api/v1/backoffice/platform-users/${employeeId}/reset-password`)
@@ -456,9 +479,9 @@ describe('backoffice operational modules', () => {
 
       const res = await request(app).get('/api/v1/backoffice/audit').set(authHeader(token));
       expect(res.status).toBe(200);
-      expect(res.body.items.some((e: { action: string }) => e.action === 'organisation.updated')).toBe(
-        true,
-      );
+      expect(
+        res.body.items.some((e: { action: string }) => e.action === 'organisation.updated'),
+      ).toBe(true);
     });
   });
 });

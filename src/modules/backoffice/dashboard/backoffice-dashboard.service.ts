@@ -81,9 +81,7 @@ export class BackofficeDashboardService {
       title: event.title,
       eventType: event.eventType,
       organisation: event.organisation,
-      actor: event.actorUser
-        ? `${event.actorUser.firstName} ${event.actorUser.lastName}`
-        : null,
+      actor: event.actorUser ? `${event.actorUser.firstName} ${event.actorUser.lastName}` : null,
       createdAt: event.createdAt,
     }));
   }

@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { ConflictError, NotFoundError } from '../../errors/AppError.js';
+import { withPublicReference } from '../../lib/public-reference.js';
 import { recordActivity } from '../activity/activity.js';
 import { getAttentionItems, OPEN_REQUEST_STATUSES } from '../../lib/attention-engine.js';
 import type { AuthContext } from '../../middlewares/auth.middleware.js';
@@ -100,9 +101,16 @@ export class PropertiesService {
         : undefined;
 
     return this.prisma.$transaction(async (tx) => {
-      const property = await tx.property.create({
-        data: { organisationId, ...input, ...(strataStatus ? { strataStatus } : {}) },
-      });
+      const property = await withPublicReference('PROP', (publicReference) =>
+        tx.property.create({
+          data: {
+            organisationId,
+            publicReference,
+            ...input,
+            ...(strataStatus ? { strataStatus } : {}),
+          },
+        }),
+      );
 
       await recordActivity(tx, {
         organisationId,

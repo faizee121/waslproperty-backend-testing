@@ -19,9 +19,15 @@ import {
 type Row = Record<string, unknown>;
 
 const SECRET_COLUMN_NAMES = new Set(
-  Object.values(SECRET_FIELDS).flat().map((f) => f.toLowerCase()),
+  Object.values(SECRET_FIELDS)
+    .flat()
+    .map((f) => f.toLowerCase()),
 );
-const PII_COLUMN_NAMES = new Set(Object.values(PII_FIELDS).flat().map((f) => f.toLowerCase()));
+const PII_COLUMN_NAMES = new Set(
+  Object.values(PII_FIELDS)
+    .flat()
+    .map((f) => f.toLowerCase()),
+);
 
 const REDACTED = '[REDACTED]';
 
@@ -112,7 +118,9 @@ export class BackofficeSqlConsoleService {
         );
       }
       if (!reason?.trim()) {
-        throw new ValidationError('A reason is required for any statement that changes data or schema.');
+        throw new ValidationError(
+          'A reason is required for any statement that changes data or schema.',
+        );
       }
       const required = requiredConfirmationPhrase(isMutating, isProduction);
       if (confirmationPhrase?.trim() !== required) {

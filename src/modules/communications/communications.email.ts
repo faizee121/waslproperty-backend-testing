@@ -45,9 +45,15 @@ export function renderAnnouncementEmail(input: AnnouncementEmailInput): {
     </div>
   `.trim();
 
-  const text = [`Hi ${input.recipientFirstName},`, '', input.title, '', input.body, '', `Sent by ${input.organisationName}.`].join(
-    '\n',
-  );
+  const text = [
+    `Hi ${input.recipientFirstName},`,
+    '',
+    input.title,
+    '',
+    input.body,
+    '',
+    `Sent by ${input.organisationName}.`,
+  ].join('\n');
 
   return { subject: input.title, html, text };
 }

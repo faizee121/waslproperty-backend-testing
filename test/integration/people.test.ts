@@ -132,9 +132,19 @@ describe('people / property memberships', () => {
 
   it('rejects a MEMBER adding a person but allows listing (RBAC)', async () => {
     const { organisationId, userId } = await registerTestUser(app);
-    const ownerToken = signAccessToken({ sub: userId, sessionType: 'CUSTOMER', organisationId, orgRole: 'OWNER' });
+    const ownerToken = signAccessToken({
+      sub: userId,
+      sessionType: 'CUSTOMER',
+      organisationId,
+      orgRole: 'OWNER',
+    });
     const { propertyId } = await setupPropertyAndSpace(ownerToken);
-    const memberToken = signAccessToken({ sub: userId, sessionType: 'CUSTOMER', organisationId, orgRole: 'MEMBER' });
+    const memberToken = signAccessToken({
+      sub: userId,
+      sessionType: 'CUSTOMER',
+      organisationId,
+      orgRole: 'MEMBER',
+    });
 
     const listRes = await request(app)
       .get(`/api/v1/properties/${propertyId}/memberships`)

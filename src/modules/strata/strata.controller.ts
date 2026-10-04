@@ -18,7 +18,10 @@ function requireAuth(req: Request) {
 
 export async function getStrataSummary(req: Request, res: Response) {
   const auth = requireAuth(req);
-  const summary = await strataService.getSummary(auth.organisationId, req.params.propertyId as string);
+  const summary = await strataService.getSummary(
+    auth.organisationId,
+    req.params.propertyId as string,
+  );
   res.json(summary);
 }
 

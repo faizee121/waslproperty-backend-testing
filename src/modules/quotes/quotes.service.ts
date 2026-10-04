@@ -164,7 +164,11 @@ export class QuotesService {
     // organisation's Approval & Acceptance policy is resolved (see
     // ApprovalPolicyService's doc comment for why this is one of exactly
     // three resolution points).
-    const resolution = await this.approvalPolicy.resolve(organisationId, input.amount, currencyCode);
+    const resolution = await this.approvalPolicy.resolve(
+      organisationId,
+      input.amount,
+      currencyCode,
+    );
 
     return this.prisma.contractorQuote.create({
       data: {
@@ -524,7 +528,8 @@ export class QuotesService {
         entityType: 'WorkOrder',
         entityId: quote.workOrder.id,
         title: `Quote rejected: ${quote.workOrder.title}`,
-        description: input.reason ?? `${quote.amount} ${quote.currencyCode} · ${quote.contractor.name}`,
+        description:
+          input.reason ?? `${quote.amount} ${quote.currencyCode} · ${quote.contractor.name}`,
       });
 
       await notifyOrgStaff(

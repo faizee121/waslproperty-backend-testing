@@ -217,9 +217,7 @@ describe('backoffice platform auth', () => {
 
     it('rejects a customer token on every Backoffice route', async () => {
       const { accessToken } = await registerTestUser(app);
-      const res = await request(app)
-        .get('/api/v1/backoffice/auth/me')
-        .set(authHeader(accessToken));
+      const res = await request(app).get('/api/v1/backoffice/auth/me').set(authHeader(accessToken));
       expect(res.status).toBe(401);
     });
 

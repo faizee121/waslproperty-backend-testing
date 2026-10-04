@@ -51,7 +51,12 @@ describe('saved audiences', () => {
 
   it('rejects a MEMBER creating one (RBAC)', async () => {
     const { organisationId, userId } = await registerTestUser(app);
-    const memberToken = signAccessToken({ sub: userId, sessionType: 'CUSTOMER', organisationId, orgRole: 'MEMBER' });
+    const memberToken = signAccessToken({
+      sub: userId,
+      sessionType: 'CUSTOMER',
+      organisationId,
+      orgRole: 'MEMBER',
+    });
 
     const res = await request(app)
       .post('/api/v1/saved-audiences')
@@ -70,9 +75,7 @@ describe('saved audiences', () => {
       .send({ name: 'Manly Cove Tenants', criteria: { scope: 'ORGANISATION', roles: ['TENANT'] } });
     expect(created.status).toBe(201);
 
-    const list = await request(app)
-      .get('/api/v1/saved-audiences')
-      .set(authHeader(accessToken));
+    const list = await request(app).get('/api/v1/saved-audiences').set(authHeader(accessToken));
     expect(list.status).toBe(200);
     expect(list.body.items).toHaveLength(1);
     expect(list.body.items[0].resolvedCount).toBe(1);
@@ -88,9 +91,7 @@ describe('saved audiences', () => {
       .set(authHeader(accessToken))
       .send({ name: 'All tenants', criteria: { scope: 'ORGANISATION', roles: ['TENANT'] } });
 
-    const before = await request(app)
-      .get('/api/v1/saved-audiences')
-      .set(authHeader(accessToken));
+    const before = await request(app).get('/api/v1/saved-audiences').set(authHeader(accessToken));
     expect(before.body.items[0].resolvedCount).toBe(1);
 
     await request(app)
@@ -103,9 +104,7 @@ describe('saved audiences', () => {
         role: 'TENANT',
       });
 
-    const after = await request(app)
-      .get('/api/v1/saved-audiences')
-      .set(authHeader(accessToken));
+    const after = await request(app).get('/api/v1/saved-audiences').set(authHeader(accessToken));
     expect(after.body.items[0].resolvedCount).toBe(2);
   });
 

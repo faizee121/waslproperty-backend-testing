@@ -2,6 +2,7 @@ import type { MaintenanceRequestStatus, Prisma, PrismaClient } from '@prisma/cli
 import { recordActivity } from '../activity/activity.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '../../errors/AppError.js';
 import type { PaginatedResult } from '../../lib/pagination.js';
+import { withPublicReference } from '../../lib/public-reference.js';
 import type { AuthContext } from '../../middlewares/auth.middleware.js';
 import { notifyOrgStaff, notifyUser } from '../notifications/notifications.js';
 import { residentWorkOrderStatusLabel } from '../work-orders/work-orders.service.js';
@@ -13,8 +14,8 @@ import type {
 } from './maintenance.schemas.js';
 
 const requestInclude = {
-  property: { select: { id: true, name: true, code: true } },
-  space: { select: { id: true, name: true, code: true } },
+  property: { select: { id: true, publicReference: true, name: true, code: true } },
+  space: { select: { id: true, publicReference: true, name: true, code: true } },
   reportedBy: { select: { id: true, firstName: true, lastName: true, email: true } },
 } satisfies Prisma.MaintenanceRequestInclude;
 
@@ -117,21 +118,24 @@ export class MaintenanceService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      const request = await tx.maintenanceRequest.create({
-        data: {
-          organisationId,
-          propertyId: input.propertyId,
-          spaceId: input.spaceId ?? null,
-          reportedByUserId: auth.userId,
-          title: input.title,
-          description: input.description,
-          category: input.category,
-          priority: input.priority,
-          status: 'NEW',
-          reportedAt: new Date(),
-        },
-        include: requestInclude,
-      });
+      const request = await withPublicReference('MR', (publicReference) =>
+        tx.maintenanceRequest.create({
+          data: {
+            organisationId,
+            publicReference,
+            propertyId: input.propertyId,
+            spaceId: input.spaceId ?? null,
+            reportedByUserId: auth.userId,
+            title: input.title,
+            description: input.description,
+            category: input.category,
+            priority: input.priority,
+            status: 'NEW',
+            reportedAt: new Date(),
+          },
+          include: requestInclude,
+        }),
+      );
 
       await recordActivity(tx, {
         organisationId,
@@ -240,7 +244,8 @@ export class MaintenanceService {
     const isOwnReport = request.reportedByUserId === auth.userId;
     const hasOperationalAccess =
       !auth.orgRole && (await this.authz.can(auth, 'maintenance.view', request.propertyId));
-    const isOrgStaff = auth.orgRole === 'OWNER' || auth.orgRole === 'ADMIN' || auth.orgRole === 'MEMBER';
+    const isOrgStaff =
+      auth.orgRole === 'OWNER' || auth.orgRole === 'ADMIN' || auth.orgRole === 'MEMBER';
 
     if (!isOrgStaff && !isOwnReport && !hasOperationalAccess) {
       // Probing another resident's (or another property's) request id —

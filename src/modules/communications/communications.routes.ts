@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../../middlewares/auth.middleware.js';
 import { requireCapability } from '../../middlewares/authorize.middleware.js';
+import { resolveCommunicationReference } from '../../middlewares/resolvePublicReference.js';
 import { asyncHandler } from '../../middlewares/asyncHandler.js';
 import {
   cancelCommunication,
@@ -24,7 +25,11 @@ export const communicationsRouter = Router();
 
 communicationsRouter.use(authenticate);
 
-communicationsRouter.get('/', requireCapability('communications.view'), asyncHandler(listCommunications));
+communicationsRouter.get(
+  '/',
+  requireCapability('communications.view'),
+  asyncHandler(listCommunications),
+);
 communicationsRouter.post(
   '/',
   requireCapability('communications.manage'),
@@ -37,31 +42,37 @@ communicationsRouter.post(
 );
 communicationsRouter.get(
   '/:id',
+  resolveCommunicationReference('id'),
   requireCapability('communications.view'),
   asyncHandler(getCommunication),
 );
 communicationsRouter.patch(
   '/:id',
+  resolveCommunicationReference('id'),
   requireCapability('communications.manage'),
   asyncHandler(updateCommunication),
 );
 communicationsRouter.post(
   '/:id/send',
+  resolveCommunicationReference('id'),
   requireCapability('communications.send'),
   asyncHandler(sendCommunication),
 );
 communicationsRouter.post(
   '/:id/cancel',
+  resolveCommunicationReference('id'),
   requireCapability('communications.manage'),
   asyncHandler(cancelCommunication),
 );
 communicationsRouter.post(
   '/:id/duplicate',
+  resolveCommunicationReference('id'),
   requireCapability('communications.manage'),
   asyncHandler(duplicateCommunication),
 );
 communicationsRouter.get(
   '/:id/delivery',
+  resolveCommunicationReference('id'),
   requireCapability('communications.view'),
   asyncHandler(getCommunicationDelivery),
 );

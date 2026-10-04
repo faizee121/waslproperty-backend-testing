@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticate } from '../../middlewares/auth.middleware.js';
 import { requireCapability } from '../../middlewares/authorize.middleware.js';
 import { fromParam } from '../../middlewares/resolvePropertyId.js';
+import { resolvePropertyReference } from '../../middlewares/resolvePublicReference.js';
 import { asyncHandler } from '../../middlewares/asyncHandler.js';
 import { listActivityForProperty } from '../activity/activity.controller.js';
 import {
@@ -47,47 +48,55 @@ propertiesRouter.post('/', requireCapability('property.manage'), asyncHandler(cr
 // operational `property.view` capability — PropertiesService.getById
 // resolves both and 404s if neither applies (never leaking that a
 // different property exists, staff or resident alike).
-propertiesRouter.get('/:id', asyncHandler(getProperty));
+propertiesRouter.get('/:id', resolvePropertyReference('id'), asyncHandler(getProperty));
 propertiesRouter.patch(
   '/:id',
+  resolvePropertyReference('id'),
   requireCapability('property.manage', fromParam('id')),
   asyncHandler(updateProperty),
 );
 propertiesRouter.get(
   '/:id/insights',
+  resolvePropertyReference('id'),
   requireCapability('analytics.view', fromParam('id')),
   asyncHandler(getPropertyInsights),
 );
 
 propertiesRouter.get(
   '/:propertyId/spaces',
+  resolvePropertyReference('propertyId'),
   requireCapability('spaces.view', fromParam('propertyId')),
   asyncHandler(listSpacesForProperty),
 );
 propertiesRouter.post(
   '/:propertyId/spaces',
+  resolvePropertyReference('propertyId'),
   requireCapability('spaces.manage', fromParam('propertyId')),
   asyncHandler(createSpaceForProperty),
 );
 
 propertiesRouter.get(
   '/:propertyId/memberships',
+  resolvePropertyReference('propertyId'),
   requireCapability('people.view', fromParam('propertyId')),
   asyncHandler(listPeopleForProperty),
 );
 propertiesRouter.post(
   '/:propertyId/memberships',
+  resolvePropertyReference('propertyId'),
   requireCapability('people.manage', fromParam('propertyId')),
   asyncHandler(addPersonToProperty),
 );
 propertiesRouter.post(
   '/:propertyId/memberships/assign',
+  resolvePropertyReference('propertyId'),
   requireCapability('people.manage', fromParam('propertyId')),
   asyncHandler(assignExistingPerson),
 );
 
 propertiesRouter.get(
   '/:propertyId/activity',
+  resolvePropertyReference('propertyId'),
   requireCapability('activity.view', fromParam('propertyId')),
   asyncHandler(listActivityForProperty),
 );
@@ -100,31 +109,37 @@ propertiesRouter.get(
 // configure its strata scheme, and vice versa.
 propertiesRouter.get(
   '/:propertyId/strata',
+  resolvePropertyReference('propertyId'),
   requireCapability('strata.view', fromParam('propertyId')),
   asyncHandler(getStrataSummary),
 );
 propertiesRouter.post(
   '/:propertyId/strata/enable',
+  resolvePropertyReference('propertyId'),
   requireCapability('strata.manage', fromParam('propertyId')),
   asyncHandler(enableStrata),
 );
 propertiesRouter.patch(
   '/:propertyId/strata/plan',
+  resolvePropertyReference('propertyId'),
   requireCapability('strata.manage', fromParam('propertyId')),
   asyncHandler(updateStrataPlan),
 );
 propertiesRouter.put(
   '/:propertyId/strata/lots',
+  resolvePropertyReference('propertyId'),
   requireCapability('strata.manage', fromParam('propertyId')),
   asyncHandler(bulkSetStrataLots),
 );
 propertiesRouter.put(
   '/:propertyId/strata/spaces/classify',
+  resolvePropertyReference('propertyId'),
   requireCapability('strata.manage', fromParam('propertyId')),
   asyncHandler(classifyStrataSpaces),
 );
 propertiesRouter.post(
   '/:propertyId/strata/complete',
+  resolvePropertyReference('propertyId'),
   requireCapability('strata.manage', fromParam('propertyId')),
   asyncHandler(completeStrataSetup),
 );

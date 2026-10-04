@@ -2,7 +2,12 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { resetDb, testPrisma } from '../helpers/db.js';
-import { authHeader, createPlainUser, registerTestUser, residentAccessToken } from '../helpers/auth.js';
+import {
+  authHeader,
+  createPlainUser,
+  registerTestUser,
+  residentAccessToken,
+} from '../helpers/auth.js';
 
 const app = createApp();
 
@@ -37,7 +42,11 @@ async function createProperty(accessToken: string, overrides: Record<string, unk
   return res.body as { id: string; name: string };
 }
 
-async function createSpace(accessToken: string, propertyId: string, overrides: Record<string, unknown> = {}) {
+async function createSpace(
+  accessToken: string,
+  propertyId: string,
+  overrides: Record<string, unknown> = {},
+) {
   const res = await request(app)
     .post(`/api/v1/properties/${propertyId}/spaces`)
     .set(authHeader(accessToken))
@@ -51,7 +60,11 @@ async function createSpace(accessToken: string, propertyId: string, overrides: R
   return res.body as { id: string; code: string };
 }
 
-async function enableStrata(accessToken: string, propertyId: string, body: Record<string, unknown> = {}) {
+async function enableStrata(
+  accessToken: string,
+  propertyId: string,
+  body: Record<string, unknown> = {},
+) {
   return request(app)
     .post(`/api/v1/properties/${propertyId}/strata/enable`)
     .set(authHeader(accessToken))
@@ -59,9 +72,7 @@ async function enableStrata(accessToken: string, propertyId: string, body: Recor
 }
 
 async function getStrataSummary(accessToken: string, propertyId: string) {
-  return request(app)
-    .get(`/api/v1/properties/${propertyId}/strata`)
-    .set(authHeader(accessToken));
+  return request(app).get(`/api/v1/properties/${propertyId}/strata`).set(authHeader(accessToken));
 }
 
 /** Creates a real User first (so PropertyContact.userId links to it — see
@@ -131,9 +142,9 @@ describe('strata Units of Entitlement (M11-B)', () => {
       const activity = await request(app)
         .get(`/api/v1/properties/${property.id}/activity`)
         .set(authHeader(accessToken));
-      expect(activity.body.items.some((e: { eventType: string }) => e.eventType === 'STRATA_ENABLED')).toBe(
-        true,
-      );
+      expect(
+        activity.body.items.some((e: { eventType: string }) => e.eventType === 'STRATA_ENABLED'),
+      ).toBe(true);
     });
 
     it('re-enabling (saving the same step again) never regresses an already-ACTIVE property', async () => {
@@ -147,7 +158,9 @@ describe('strata Units of Entitlement (M11-B)', () => {
         .post(`/api/v1/properties/${property.id}/strata/complete`)
         .set(authHeader(accessToken));
 
-      const again = await enableStrata(accessToken, property.id, { strataSchemeName: 'Renamed Scheme' });
+      const again = await enableStrata(accessToken, property.id, {
+        strataSchemeName: 'Renamed Scheme',
+      });
       expect(again.status).toBe(200);
       expect(again.body.strataStatus).toBe('ACTIVE');
     });
@@ -542,7 +555,7 @@ describe('strata Units of Entitlement (M11-B)', () => {
       expect(enableRes.status).toBe(200);
     });
 
-    it('a different organisation cannot see or act on this property\'s strata data', async () => {
+    it("a different organisation cannot see or act on this property's strata data", async () => {
       const orgA = await registerAuOrg({ email: `a+${Date.now()}@example.com` });
       const orgB = await registerAuOrg({ email: `b+${Date.now()}@example.com` });
       const property = await createProperty(orgA.accessToken);
@@ -688,8 +701,14 @@ describe('strata Units of Entitlement (M11-B)', () => {
     it('classifies 2 of 3 existing Spaces as Lots and 1 as Common Property', async () => {
       const { accessToken } = await registerAuOrg();
       const property = await createProperty(accessToken);
-      const unit101 = await createSpace(accessToken, property.id, { name: 'Unit 101', code: 'U101' });
-      const unit102 = await createSpace(accessToken, property.id, { name: 'Unit 102', code: 'U102' });
+      const unit101 = await createSpace(accessToken, property.id, {
+        name: 'Unit 101',
+        code: 'U101',
+      });
+      const unit102 = await createSpace(accessToken, property.id, {
+        name: 'Unit 102',
+        code: 'U102',
+      });
       const lobby = await createSpace(accessToken, property.id, { name: 'Lobby', code: 'LOBBY' });
       await enableStrata(accessToken, property.id);
 
@@ -702,7 +721,10 @@ describe('strata Units of Entitlement (M11-B)', () => {
       expect(res.body.lotCount).toBe(2);
       expect(res.body.commonPropertyCount).toBe(1);
       expect(res.body.unclassifiedCount).toBe(0);
-      expect(res.body.lots.map((l: { name: string }) => l.name).sort()).toEqual(['Unit 101', 'Unit 102']);
+      expect(res.body.lots.map((l: { name: string }) => l.name).sort()).toEqual([
+        'Unit 101',
+        'Unit 102',
+      ]);
     });
 
     it('excludes Common Property from total UOE and entitlement shares', async () => {
@@ -730,7 +752,10 @@ describe('strata Units of Entitlement (M11-B)', () => {
     it('does NOT infer strata Lot status from a Space name containing "Lot"', async () => {
       const { accessToken } = await registerAuOrg();
       const property = await createProperty(accessToken);
-      const space = await createSpace(accessToken, property.id, { name: 'Lot-4 Storage', code: 'LOT4' });
+      const space = await createSpace(accessToken, property.id, {
+        name: 'Lot-4 Storage',
+        code: 'LOT4',
+      });
       await enableStrata(accessToken, property.id);
 
       const summary = await getStrataSummary(accessToken, property.id);
@@ -944,7 +969,9 @@ describe('strata Units of Entitlement (M11-B)', () => {
 
       // Classify as Common Property first, then correct to Lot/Unit — a
       // sensible mid-setup correction (M11-B.1 Section 15).
-      await classifySpaces(accessToken, property.id, [{ spaceId: space.id, classification: 'COMMON_PROPERTY' }]);
+      await classifySpaces(accessToken, property.id, [
+        { spaceId: space.id, classification: 'COMMON_PROPERTY' },
+      ]);
       const corrected = await classifySpaces(accessToken, property.id, [
         { spaceId: space.id, classification: 'LOT', lotNumber: '1', unitsOfEntitlement: 15 },
       ]);

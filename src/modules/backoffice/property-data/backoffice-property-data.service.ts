@@ -107,7 +107,10 @@ export class BackofficePropertyDataService {
       this.prisma.propertyMembership.count({ where }),
     ]);
     return {
-      items: items.map((m) => ({ ...m, contact: maskPiiFields('PropertyContact', m.contact, capabilities) })),
+      items: items.map((m) => ({
+        ...m,
+        contact: maskPiiFields('PropertyContact', m.contact, capabilities),
+      })),
       page: query.page,
       pageSize: query.pageSize,
       total,

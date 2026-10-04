@@ -54,8 +54,21 @@ async function main() {
 
   const employee = await prisma.employee.upsert({
     where: { username },
-    update: { passwordHash: await hashPassword(password), firstName, lastName, role, isActive: true },
-    create: { username, passwordHash: await hashPassword(password), firstName, lastName, role, isActive: true },
+    update: {
+      passwordHash: await hashPassword(password),
+      firstName,
+      lastName,
+      role,
+      isActive: true,
+    },
+    create: {
+      username,
+      passwordHash: await hashPassword(password),
+      firstName,
+      lastName,
+      role,
+      isActive: true,
+    },
   });
 
   console.log(`Employee "${username}" (${employee.id}) is now ${role}.`);

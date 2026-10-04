@@ -7,17 +7,14 @@ import { authHeader, registerTestUser, residentAccessToken } from '../helpers/au
 const app = createApp();
 
 async function createProperty(accessToken: string, code: string, name = code) {
-  const res = await request(app)
-    .post('/api/v1/properties')
-    .set(authHeader(accessToken))
-    .send({
-      name,
-      code,
-      addressLine1: '1 Test Street',
-      city: 'Sydney',
-      country: 'Australia',
-      propertyType: 'RESIDENTIAL',
-    });
+  const res = await request(app).post('/api/v1/properties').set(authHeader(accessToken)).send({
+    name,
+    code,
+    addressLine1: '1 Test Street',
+    city: 'Sydney',
+    country: 'Australia',
+    propertyType: 'RESIDENTIAL',
+  });
   expect(res.status).toBe(201);
   return res.body.id as string;
 }
@@ -47,7 +44,12 @@ async function addPerson(
   };
 }
 
-async function assignExisting(accessToken: string, propertyId: string, contactId: string, role: string) {
+async function assignExisting(
+  accessToken: string,
+  propertyId: string,
+  contactId: string,
+  role: string,
+) {
   const res = await request(app)
     .post(`/api/v1/properties/${propertyId}/memberships/assign`)
     .set(authHeader(accessToken))
@@ -75,20 +77,26 @@ describe('property-scoped role authorization', () => {
 
       const person = await addPerson(owner.accessToken, propertyA, 'PROPERTY_MANAGER');
       await assignExisting(owner.accessToken, propertyB, person.contactId, 'PROPERTY_MANAGER');
-      const managerToken = residentAccessToken(person.userId, owner.organisationId, person.contactId);
+      const managerToken = residentAccessToken(
+        person.userId,
+        owner.organisationId,
+        person.contactId,
+      );
 
-      const listRes = await request(app)
-        .get('/api/v1/properties')
-        .set(authHeader(managerToken));
+      const listRes = await request(app).get('/api/v1/properties').set(authHeader(managerToken));
       expect(listRes.status).toBe(200);
       const ids = listRes.body.items.map((p: { id: string }) => p.id);
       expect(ids).toEqual(expect.arrayContaining([propertyA, propertyB]));
       expect(ids).not.toContain(propertyC);
       expect(listRes.body.total).toBe(2);
 
-      const okA = await request(app).get(`/api/v1/properties/${propertyA}`).set(authHeader(managerToken));
+      const okA = await request(app)
+        .get(`/api/v1/properties/${propertyA}`)
+        .set(authHeader(managerToken));
       expect(okA.status).toBe(200);
-      const okB = await request(app).get(`/api/v1/properties/${propertyB}`).set(authHeader(managerToken));
+      const okB = await request(app)
+        .get(`/api/v1/properties/${propertyB}`)
+        .set(authHeader(managerToken));
       expect(okB.status).toBe(200);
 
       // Never leaks whether C exists — 404, matching org-crossing behaviour.
@@ -104,7 +112,11 @@ describe('property-scoped role authorization', () => {
       const propertyB = await createProperty(owner.accessToken, 'SPACE-B');
 
       const person = await addPerson(owner.accessToken, propertyA, 'PROPERTY_MANAGER');
-      const managerToken = residentAccessToken(person.userId, owner.organisationId, person.contactId);
+      const managerToken = residentAccessToken(
+        person.userId,
+        owner.organisationId,
+        person.contactId,
+      );
 
       const spaceBRes = await request(app)
         .post(`/api/v1/properties/${propertyB}/spaces`)
@@ -117,7 +129,9 @@ describe('property-scoped role authorization', () => {
       // resource the caller's org can see, just not one they're scoped
       // to: 403, not 404 (404 is reserved for resources invisible to the
       // caller's organisation entirely — see multi-org-access.test.ts).
-      const getRes = await request(app).get(`/api/v1/spaces/${spaceBId}`).set(authHeader(managerToken));
+      const getRes = await request(app)
+        .get(`/api/v1/spaces/${spaceBId}`)
+        .set(authHeader(managerToken));
       expect(getRes.status).toBe(403);
 
       const patchRes = await request(app)
@@ -145,7 +159,12 @@ describe('property-scoped role authorization', () => {
       const meRes = await request(app).get('/api/v1/organisations/me').set(authHeader(fmToken));
       expect(meRes.status).toBe(200);
       expect(meRes.body.capabilities).toEqual(
-        expect.arrayContaining(['maintenance.view', 'maintenance.manage', 'work_orders.view', 'work_orders.manage']),
+        expect.arrayContaining([
+          'maintenance.view',
+          'maintenance.manage',
+          'work_orders.view',
+          'work_orders.manage',
+        ]),
       );
       expect(meRes.body.capabilities).not.toContain('people.manage');
       expect(meRes.body.capabilities).not.toContain('contractors.manage');
@@ -164,14 +183,20 @@ describe('property-scoped role authorization', () => {
       const owner = await registerTestUser(app);
       const propertyId = await createProperty(owner.accessToken, 'TEN-01');
       const person = await addPerson(owner.accessToken, propertyId, 'TENANT');
-      const tenantToken = residentAccessToken(person.userId, owner.organisationId, person.contactId);
+      const tenantToken = residentAccessToken(
+        person.userId,
+        owner.organisationId,
+        person.contactId,
+      );
 
       const meRes = await request(app).get('/api/v1/organisations/me').set(authHeader(tenantToken));
       expect(meRes.status).toBe(200);
       expect(meRes.body.capabilities).toEqual([]);
 
       // Read-only self view of their own property still works (pre-existing behaviour).
-      const getRes = await request(app).get(`/api/v1/properties/${propertyId}`).set(authHeader(tenantToken));
+      const getRes = await request(app)
+        .get(`/api/v1/properties/${propertyId}`)
+        .set(authHeader(tenantToken));
       expect(getRes.status).toBe(200);
 
       const patchRes = await request(app)
@@ -219,7 +244,11 @@ describe('property-scoped role authorization', () => {
       const owner = await registerTestUser(app);
       const propertyId = await createProperty(owner.accessToken, 'END-01');
       const person = await addPerson(owner.accessToken, propertyId, 'PROPERTY_MANAGER');
-      const managerToken = residentAccessToken(person.userId, owner.organisationId, person.contactId);
+      const managerToken = residentAccessToken(
+        person.userId,
+        owner.organisationId,
+        person.contactId,
+      );
 
       const beforeRes = await request(app)
         .post(`/api/v1/properties/${propertyId}/spaces`)
@@ -245,9 +274,15 @@ describe('property-scoped role authorization', () => {
       const owner = await registerTestUser(app);
       const propertyId = await createProperty(owner.accessToken, 'OVR-01');
       const person = await addPerson(owner.accessToken, propertyId, 'PROPERTY_MANAGER');
-      const managerToken = residentAccessToken(person.userId, owner.organisationId, person.contactId);
+      const managerToken = residentAccessToken(
+        person.userId,
+        owner.organisationId,
+        person.contactId,
+      );
 
-      const before = await request(app).get('/api/v1/organisations/me').set(authHeader(managerToken));
+      const before = await request(app)
+        .get('/api/v1/organisations/me')
+        .set(authHeader(managerToken));
       expect(before.body.capabilities).toContain('contractors.view');
 
       const disableRes = await request(app)
@@ -261,7 +296,9 @@ describe('property-scoped role authorization', () => {
       expect(disabledRow.granted).toBe(false);
       expect(disabledRow.isOverride).toBe(true);
 
-      const after = await request(app).get('/api/v1/organisations/me').set(authHeader(managerToken));
+      const after = await request(app)
+        .get('/api/v1/organisations/me')
+        .set(authHeader(managerToken));
       expect(after.body.capabilities).not.toContain('contractors.view');
 
       const contractorsListRes = await request(app)
@@ -274,7 +311,9 @@ describe('property-scoped role authorization', () => {
         .set(authHeader(owner.accessToken));
       expect(resetRes.status).toBe(200);
 
-      const afterReset = await request(app).get('/api/v1/organisations/me').set(authHeader(managerToken));
+      const afterReset = await request(app)
+        .get('/api/v1/organisations/me')
+        .set(authHeader(managerToken));
       expect(afterReset.body.capabilities).toContain('contractors.view');
     });
 
@@ -282,7 +321,11 @@ describe('property-scoped role authorization', () => {
       const owner = await registerTestUser(app);
       const propertyId = await createProperty(owner.accessToken, 'CREATE-01');
       const person = await addPerson(owner.accessToken, propertyId, 'PROPERTY_MANAGER');
-      const managerToken = residentAccessToken(person.userId, owner.organisationId, person.contactId);
+      const managerToken = residentAccessToken(
+        person.userId,
+        owner.organisationId,
+        person.contactId,
+      );
 
       const beforeRes = await request(app)
         .post('/api/v1/properties')
@@ -328,7 +371,11 @@ describe('property-scoped role authorization', () => {
         .set(authHeader(owner.accessToken))
         .send({ overrides: [{ capability: 'property.manage', granted: true }] });
 
-      const unaffiliatedToken = residentAccessToken('user_ghost', owner.organisationId, 'contact_ghost');
+      const unaffiliatedToken = residentAccessToken(
+        'user_ghost',
+        owner.organisationId,
+        'contact_ghost',
+      );
       const res = await request(app)
         .post('/api/v1/properties')
         .set(authHeader(unaffiliatedToken))
@@ -347,7 +394,11 @@ describe('property-scoped role authorization', () => {
       const owner = await registerTestUser(app);
       const propertyId = await createProperty(owner.accessToken, 'RBAC-01');
       const person = await addPerson(owner.accessToken, propertyId, 'PROPERTY_MANAGER');
-      const managerToken = residentAccessToken(person.userId, owner.organisationId, person.contactId);
+      const managerToken = residentAccessToken(
+        person.userId,
+        owner.organisationId,
+        person.contactId,
+      );
 
       const res = await request(app)
         .put('/api/v1/organisations/me/role-permissions/PROPERTY_MANAGER')
@@ -377,15 +428,22 @@ describe('property-scoped role authorization', () => {
         .set(authHeader(owner.accessToken));
       expect(res.status).toBe(200);
       expect(res.body.configurableRoles).toEqual(
-        expect.arrayContaining(['PROPERTY_MANAGER', 'FACILITY_MANAGER', 'AGENT', 'COMMITTEE_MEMBER', 'OWNER']),
+        expect.arrayContaining([
+          'PROPERTY_MANAGER',
+          'FACILITY_MANAGER',
+          'AGENT',
+          'COMMITTEE_MEMBER',
+          'OWNER',
+        ]),
       );
       expect(res.body.configurableRoles).not.toContain('TENANT');
       expect(res.body.configurableRoles).not.toContain('RESIDENT');
       expect(Array.isArray(res.body.capabilityGroups)).toBe(true);
       const pmRole = res.body.roles.find((r: { role: string }) => r.role === 'PROPERTY_MANAGER');
-      expect(pmRole.capabilities.find((c: { capability: string }) => c.capability === 'property.view').granted).toBe(
-        true,
-      );
+      expect(
+        pmRole.capabilities.find((c: { capability: string }) => c.capability === 'property.view')
+          .granted,
+      ).toBe(true);
     });
   });
 
@@ -399,7 +457,9 @@ describe('property-scoped role authorization', () => {
       expect(res.status).toBe(200);
       expect(res.body.total).toBe(2);
 
-      const meRes = await request(app).get('/api/v1/organisations/me').set(authHeader(owner.accessToken));
+      const meRes = await request(app)
+        .get('/api/v1/organisations/me')
+        .set(authHeader(owner.accessToken));
       expect(meRes.body.capabilities.length).toBeGreaterThan(15);
     });
   });

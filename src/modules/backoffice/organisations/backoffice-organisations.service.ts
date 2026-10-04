@@ -2,7 +2,10 @@ import type { PrismaClient } from '@prisma/client';
 import { NotFoundError } from '../../../errors/AppError.js';
 import type { PaginatedResult } from '../../../lib/pagination.js';
 import { recordPlatformActivity } from '../../../platform/audit.js';
-import type { BackofficeOrganisationsQuery, UpdateOrganisationInput } from './backoffice-organisations.schemas.js';
+import type {
+  BackofficeOrganisationsQuery,
+  UpdateOrganisationInput,
+} from './backoffice-organisations.schemas.js';
 
 const STAFF_PREVIEW_LIMIT = 5;
 const PROPERTIES_PREVIEW_LIMIT = 5;

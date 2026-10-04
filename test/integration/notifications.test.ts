@@ -55,9 +55,7 @@ describe('notifications', () => {
       .set(authHeader(accessToken));
     expect(before.body.count).toBe(1);
 
-    await request(app)
-      .post(`/api/v1/notifications/${n1.id}/read`)
-      .set(authHeader(accessToken));
+    await request(app).post(`/api/v1/notifications/${n1.id}/read`).set(authHeader(accessToken));
 
     const after = await request(app)
       .get('/api/v1/notifications/unread-count')

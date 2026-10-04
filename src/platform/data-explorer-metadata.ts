@@ -33,15 +33,7 @@
 import type { PlatformCapability } from './capabilities.js';
 
 export type DataExplorerFieldType =
-  | 'string'
-  | 'text'
-  | 'int'
-  | 'decimal'
-  | 'boolean'
-  | 'datetime'
-  | 'json'
-  | 'enum'
-  | 'stringArray';
+  'string' | 'text' | 'int' | 'decimal' | 'boolean' | 'datetime' | 'json' | 'enum' | 'stringArray';
 
 export interface DataExplorerFieldMeta {
   readonly name: string;
@@ -196,13 +188,22 @@ export const DATA_EXPLORER_MODELS: Record<string, DataExplorerModelMeta> = {
       f('code', 'string', true),
       f('spaceType', 'enum', true, {
         enumValues: [
-          'APARTMENT', 'VILLA', 'OFFICE', 'RETAIL', 'WAREHOUSE', 'PARKING', 'STORAGE',
-          'COMMON_AREA', 'OTHER',
+          'APARTMENT',
+          'VILLA',
+          'OFFICE',
+          'RETAIL',
+          'WAREHOUSE',
+          'PARKING',
+          'STORAGE',
+          'COMMON_AREA',
+          'OTHER',
         ],
       }),
       f('floor', 'string', true),
       f('sizeSqft', 'int', true),
-      f('status', 'enum', true, { enumValues: ['VACANT', 'OCCUPIED', 'UNDER_MAINTENANCE', 'RESERVED'] }),
+      f('status', 'enum', true, {
+        enumValues: ['VACANT', 'OCCUPIED', 'UNDER_MAINTENANCE', 'RESERVED'],
+      }),
       f('isStrataLot', 'boolean', true),
       f('lotNumber', 'string', true),
       f('entitlementValue', 'decimal', true),
@@ -252,7 +253,12 @@ export const DATA_EXPLORER_MODELS: Record<string, DataExplorerModelMeta> = {
       f('contactId', 'string', false),
       f('role', 'enum', true, {
         enumValues: [
-          'OWNER', 'TENANT', 'RESIDENT', 'PROPERTY_MANAGER', 'FACILITY_MANAGER', 'AGENT',
+          'OWNER',
+          'TENANT',
+          'RESIDENT',
+          'PROPERTY_MANAGER',
+          'FACILITY_MANAGER',
+          'AGENT',
           'COMMITTEE_MEMBER',
         ],
       }),
@@ -286,8 +292,16 @@ export const DATA_EXPLORER_MODELS: Record<string, DataExplorerModelMeta> = {
       f('description', 'text', true),
       f('category', 'enum', true, {
         enumValues: [
-          'PLUMBING', 'ELECTRICAL', 'HVAC', 'APPLIANCE', 'STRUCTURAL', 'COMMON_AREA', 'SECURITY',
-          'CLEANING', 'PEST_CONTROL', 'OTHER',
+          'PLUMBING',
+          'ELECTRICAL',
+          'HVAC',
+          'APPLIANCE',
+          'STRUCTURAL',
+          'COMMON_AREA',
+          'SECURITY',
+          'CLEANING',
+          'PEST_CONTROL',
+          'OTHER',
         ],
       }),
       f('priority', 'enum', true, { enumValues: ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] }),
@@ -340,7 +354,11 @@ export const DATA_EXPLORER_MODELS: Record<string, DataExplorerModelMeta> = {
     relations: [
       { field: 'property', label: 'Property', targetModel: 'Property' },
       { field: 'space', label: 'Space', targetModel: 'Space' },
-      { field: 'maintenanceRequest', label: 'Maintenance Request', targetModel: 'MaintenanceRequest' },
+      {
+        field: 'maintenanceRequest',
+        label: 'Maintenance Request',
+        targetModel: 'MaintenanceRequest',
+      },
       { field: 'contractor', label: 'Contractor', targetModel: 'Contractor' },
       { field: 'createdBy', label: 'Created By', targetModel: 'User' },
     ],
@@ -489,7 +507,9 @@ export const DATA_EXPLORER_MODELS: Record<string, DataExplorerModelMeta> = {
       f('id', 'string', false),
       f('communicationRecipientId', 'string', false),
       f('channel', 'enum', false, { enumValues: ['IN_APP', 'EMAIL', 'WHATSAPP'] }),
-      f('status', 'enum', false, { enumValues: ['PENDING', 'SENDING', 'SENT', 'DELIVERED', 'FAILED'] }),
+      f('status', 'enum', false, {
+        enumValues: ['PENDING', 'SENDING', 'SENT', 'DELIVERED', 'FAILED'],
+      }),
       f('providerMessageId', 'string', false),
       f('attemptedAt', 'datetime', false),
       f('sentAt', 'datetime', false),
@@ -500,7 +520,11 @@ export const DATA_EXPLORER_MODELS: Record<string, DataExplorerModelMeta> = {
       f('updatedAt', 'datetime', false),
     ],
     relations: [
-      { field: 'communicationRecipient', label: 'Communication Recipient', targetModel: 'CommunicationRecipient' },
+      {
+        field: 'communicationRecipient',
+        label: 'Communication Recipient',
+        targetModel: 'CommunicationRecipient',
+      },
     ],
   },
 
@@ -605,7 +629,12 @@ export const DATA_EXPLORER_MODELS: Record<string, DataExplorerModelMeta> = {
       f('firstName', 'string', false),
       f('lastName', 'string', false),
       f('role', 'enum', false, {
-        enumValues: ['PLATFORM_SUPER_ADMIN', 'PLATFORM_ADMIN', 'PLATFORM_SUPPORT', 'PLATFORM_DEVELOPER'],
+        enumValues: [
+          'PLATFORM_SUPER_ADMIN',
+          'PLATFORM_ADMIN',
+          'PLATFORM_SUPPORT',
+          'PLATFORM_DEVELOPER',
+        ],
       }),
       f('isActive', 'boolean', false),
       f('grantedByEmployeeId', 'string', false),
@@ -649,7 +678,7 @@ export function formatRelationDisplay(
     return full || null;
   }
   if (targetModel === 'Property' || targetModel === 'Space') {
-    return code ? `${String(name)} (${String(code)})` : (name as string | null) ?? null;
+    return code ? `${String(name)} (${String(code)})` : ((name as string | null) ?? null);
   }
   if (typeof name === 'string') return name;
   if (typeof title === 'string') return title;

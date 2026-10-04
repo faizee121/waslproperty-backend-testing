@@ -104,7 +104,10 @@ async function setupAwardedWorkOrder(accessToken: string, amount: number) {
   };
 }
 
-async function configurePolicy(accessToken: string, policy: Record<string, unknown> = threeTierPolicy) {
+async function configurePolicy(
+  accessToken: string,
+  policy: Record<string, unknown> = threeTierPolicy,
+) {
   const res = await request(app)
     .put('/api/v1/organisations/me/approval-policy')
     .set(authHeader(accessToken))
@@ -113,7 +116,12 @@ async function configurePolicy(accessToken: string, policy: Record<string, unkno
   return res.body;
 }
 
-async function createVariation(accessToken: string, workOrderId: string, amountDelta: number, description = 'Additional scope') {
+async function createVariation(
+  accessToken: string,
+  workOrderId: string,
+  amountDelta: number,
+  description = 'Additional scope',
+) {
   const res = await request(app)
     .post(`/api/v1/work-order-variations/work-order/${workOrderId}`)
     .set(authHeader(accessToken))
@@ -310,7 +318,9 @@ describe('work order variation Approval & Acceptance enforcement', () => {
         .set(authHeader(accessToken))
         .send({ workflowMode: 'SIGNATURE_ONLY' });
 
-      const row = await testPrisma.workOrderVariation.findUniqueOrThrow({ where: { id: variation.id } });
+      const row = await testPrisma.workOrderVariation.findUniqueOrThrow({
+        where: { id: variation.id },
+      });
       const payload = signedCallbackFor('SIGNED', row.waslSignAgreementId!, variation.id);
       const callbackRes = await sendCallback(payload);
       expect(callbackRes.status).toBe(200);
@@ -350,7 +360,9 @@ describe('work order variation Approval & Acceptance enforcement', () => {
         .set(authHeader(accessToken))
         .send({ workflowMode: 'SIGNATURE_ONLY' });
 
-      const row = await testPrisma.workOrderVariation.findUniqueOrThrow({ where: { id: variation.id } });
+      const row = await testPrisma.workOrderVariation.findUniqueOrThrow({
+        where: { id: variation.id },
+      });
       await sendCallback(signedCallbackFor('DECLINED', row.waslSignAgreementId!, variation.id));
 
       const afterCallback = await testPrisma.workOrderVariation.findUniqueOrThrow({
@@ -407,7 +419,9 @@ describe('work order variation Approval & Acceptance enforcement', () => {
         .post(`/api/v1/work-order-variations/${variation.id}/approve`)
         .set(authHeader(accessToken));
 
-      const row = await testPrisma.workOrderVariation.findUniqueOrThrow({ where: { id: variation.id } });
+      const row = await testPrisma.workOrderVariation.findUniqueOrThrow({
+        where: { id: variation.id },
+      });
       await sendCallback(signedCallbackFor('SIGNED', row.waslSignAgreementId!, variation.id));
 
       const afterCallback = await testPrisma.workOrderVariation.findUniqueOrThrow({
@@ -458,7 +472,9 @@ describe('work order variation Approval & Acceptance enforcement', () => {
         .post(`/api/v1/work-order-variations/${variation.id}/approve`)
         .set(authHeader(accessToken));
 
-      const row = await testPrisma.workOrderVariation.findUniqueOrThrow({ where: { id: variation.id } });
+      const row = await testPrisma.workOrderVariation.findUniqueOrThrow({
+        where: { id: variation.id },
+      });
       await sendCallback(signedCallbackFor('EXPIRED', row.waslSignAgreementId!, variation.id));
 
       const summary = await request(app)
@@ -638,9 +654,15 @@ describe('work order variation Approval & Acceptance enforcement', () => {
       const { workOrderId } = await setupAwardedWorkOrder(accessToken, 10000);
       const variation = await createVariation(accessToken, workOrderId, 500);
 
-      expect((await request(app).post(`/api/v1/work-order-variations/${variation.id}/approve`)).status).toBe(401);
       expect(
-        (await request(app).patch(`/api/v1/work-order-variations/${variation.id}/workflow-mode`).send({ workflowMode: 'NONE' })).status,
+        (await request(app).post(`/api/v1/work-order-variations/${variation.id}/approve`)).status,
+      ).toBe(401);
+      expect(
+        (
+          await request(app)
+            .patch(`/api/v1/work-order-variations/${variation.id}/workflow-mode`)
+            .send({ workflowMode: 'NONE' })
+        ).status,
       ).toBe(401);
     });
   });
@@ -668,7 +690,9 @@ describe('work order variation Approval & Acceptance enforcement', () => {
       expect(res.body.handled).toBe(false);
       expect(res.body.reason).toBe('agreement_mismatch');
 
-      const row = await testPrisma.workOrderVariation.findUniqueOrThrow({ where: { id: variation.id } });
+      const row = await testPrisma.workOrderVariation.findUniqueOrThrow({
+        where: { id: variation.id },
+      });
       expect(row.status).toBe('APPROVED');
     });
   });
@@ -682,7 +706,9 @@ describe('work order variation Approval & Acceptance enforcement', () => {
       // Variation A: AUD 500 -> NONE -> approved -> 10,500
       const a = await createVariation(accessToken, workOrderId, 500);
       expect(a.requiredWorkflowMode).toBe('NONE');
-      await request(app).post(`/api/v1/work-order-variations/${a.id}/approve`).set(authHeader(accessToken));
+      await request(app)
+        .post(`/api/v1/work-order-variations/${a.id}/approve`)
+        .set(authHeader(accessToken));
       let summary = await request(app)
         .get(`/api/v1/work-order-variations/work-order/${workOrderId}/commercial-summary`)
         .set(authHeader(accessToken));
@@ -700,7 +726,9 @@ describe('work order variation Approval & Acceptance enforcement', () => {
         .get(`/api/v1/work-order-variations/work-order/${workOrderId}/commercial-summary`)
         .set(authHeader(accessToken));
       expect(summary.body.authorisedTotal).toBe(10500);
-      await request(app).post(`/api/v1/work-order-variations/${b.id}/approve`).set(authHeader(accessToken));
+      await request(app)
+        .post(`/api/v1/work-order-variations/${b.id}/approve`)
+        .set(authHeader(accessToken));
       summary = await request(app)
         .get(`/api/v1/work-order-variations/work-order/${workOrderId}/commercial-summary`)
         .set(authHeader(accessToken));
@@ -714,7 +742,9 @@ describe('work order variation Approval & Acceptance enforcement', () => {
         .patch(`/api/v1/work-order-variations/${c.id}/workflow-mode`)
         .set(authHeader(accessToken))
         .send({ workflowMode: 'APPROVAL_THEN_SIGNATURE' });
-      await request(app).post(`/api/v1/work-order-variations/${c.id}/approve`).set(authHeader(accessToken));
+      await request(app)
+        .post(`/api/v1/work-order-variations/${c.id}/approve`)
+        .set(authHeader(accessToken));
       summary = await request(app)
         .get(`/api/v1/work-order-variations/work-order/${workOrderId}/commercial-summary`)
         .set(authHeader(accessToken));
