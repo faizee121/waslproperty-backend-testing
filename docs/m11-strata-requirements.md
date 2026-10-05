@@ -16,13 +16,13 @@ unimplemented, pending real answers from the business.
   Organisation Settings page). Independent of `Organisation.currencyCode` —
   neither is ever inferred from the other.
 - **Jurisdiction-specific feature gating**: `src/modules/organisations/
-  organisation-features.ts` resolves an organisation's `countryCode` to a
+organisation-features.ts` resolves an organisation's `countryCode` to a
   feature set. Today: `AU` → `['STRATA_MANAGEMENT']`; every other value
   (including `null`) → `[]`. Enforced on both sides:
   - Frontend: `useOrganisationFeature('STRATA_MANAGEMENT')` (a convenience
     for hiding UI, not real enforcement on its own).
   - Backend: `assertOrganisationFeature(prisma, organisationId,
-    'STRATA_MANAGEMENT')`, called from `PropertiesService`/`SpacesService`
+'STRATA_MANAGEMENT')`, called from `PropertiesService`/`SpacesService`
     whenever a request tries to set a strata-specific field. Confirmed by
     test: a direct API call that bypasses the UI still gets rejected
     (`test/integration/strata-foundation.test.ts`, "a UI bypass attempt").
@@ -74,6 +74,7 @@ general Australian strata knowledge, or "what other products do" — wait for
 the actual answer from the business, then implement only that.
 
 **Levy creation & calculation**
+
 - What levy types exist (Administrative Fund, Capital Works Fund, special
   levy, other)? Is this a fixed enum or organisation-configurable?
 - How is a levy amount calculated — is `Space.entitlementValue` actually
@@ -84,13 +85,15 @@ the actual answer from the business, then implement only that.
   organisation or per scheme?
 
 **Entitlement usage**
+
 - Is `entitlementValue` per lot, and does the scheme also need a stored
-  *total* entitlement (currently nowhere in the schema)?
+  _total_ entitlement (currently nowhere in the schema)?
 - Does entitlement ever change after a scheme is set up (subdivision,
   re-survey), and if so, does that need its own history/audit trail
   separate from `Space`'s own `updatedAt`?
 
 **Fund structures**
+
 - Is a two-fund model (Administrative + Capital Works) universal, or does
   it vary by state/scheme type? Are there other fund types this needs to
   support?
@@ -98,12 +101,14 @@ the actual answer from the business, then implement only that.
   what — manually entered, or derived from a full transaction ledger?
 
 **Payments**
+
 - What payment methods/processors, if any? Is WaslProperty expected to
   process payments directly, or only record that a payment happened
   (reconciled against an external system)?
 - Who can record a payment — any staff role, or a restricted subset?
 
 **Overdue levies / arrears**
+
 - Interest and penalty rules are jurisdiction- and often
   scheme-by-law-specific in Australia — do not assume a rate or formula.
   What's the actual policy (if any) the business wants encoded, and does it
@@ -113,12 +118,14 @@ the actual answer from the business, then implement only that.
   escalation stages), or just a visible overdue amount?
 
 **Levy notices**
+
 - Do levy notices have legally-specific content/format requirements per
   state? Are they a special case of the Communications system below, or
   something that must stay entirely separate because of compliance
   requirements around levy notices specifically?
 
 **Non-levy notices**
+
 - What actually qualifies as a "non-levy notice" from the business's
   perspective — AGM/committee meeting notices, maintenance notices, general
   announcements? Is this simply "any Communication sent to a strata
@@ -132,7 +139,7 @@ the actual answer from the business, then implement only that.
   strata-scheme notice to just its `OWNER`/`COMMITTEE_MEMBER` memberships
   is already expressible without any new field. `CommunicationDelivery`
   already gives per-recipient, per-channel delivery tracking. What's
-  *missing* is only product/business decisions: whether "Notices" needs a
+  _missing_ is only product/business decisions: whether "Notices" needs a
   distinct `Communication` sub-type/tag for reporting, a different
   immutability or audit requirement than a normal announcement, or
   strata-specific composition UI (e.g. a "this is a scheme notice, not a
@@ -141,12 +148,14 @@ the actual answer from the business, then implement only that.
   announcement.
 
 **Owner financial visibility**
+
 - What should an OWNER see about their own lot's levies/balance? (Today,
   the existing hard rule is that residents/owners never see cost/contractor/
   quote detail for maintenance — does the same opacity apply to levies, or
   is levy visibility to the paying owner expected to be the opposite?)
 
 **Manager financial reporting**
+
 - What reports does a manager actually need (arrears list, fund balance
   summary, levy schedule export, something else)? Any specific format
   requirement (e.g. for handover to an external strata accountant)?

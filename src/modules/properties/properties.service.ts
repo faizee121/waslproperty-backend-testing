@@ -1,11 +1,13 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { ConflictError, NotFoundError } from '../../errors/AppError.js';
+import { withPublicReference } from '../../lib/public-reference.js';
 import { recordActivity } from '../activity/activity.js';
 import { getAttentionItems, OPEN_REQUEST_STATUSES } from '../../lib/attention-engine.js';
 import type { AuthContext } from '../../middlewares/auth.middleware.js';
 import type { PaginatedResult, PaginationQuery } from '../../lib/pagination.js';
 import { AuthorizationService } from '../authorization/authorization.service.js';
 import { assertOrganisationFeature } from '../organisations/organisation-features.js';
+import { resolveLegacyIsStrataManagedTransition } from '../strata/strata.service.js';
 import type { CreatePropertyInput, UpdatePropertyInput } from './properties.schemas.js';
 
 /** True when the input is trying to set/change any strata-specific field —
@@ -90,10 +92,25 @@ export class PropertiesService {
       throw new ConflictError(`A property with code "${input.code}" already exists`);
     }
 
+    // Keeps isStrataManaged and strataStatus from ever diverging (M11-B.1)
+    // — a brand-new property has no prior status, so this is always
+    // resolved against the implicit NOT_ENABLED default.
+    const strataStatus =
+      input.isStrataManaged !== undefined
+        ? resolveLegacyIsStrataManagedTransition('NOT_ENABLED', input.isStrataManaged)
+        : undefined;
+
     return this.prisma.$transaction(async (tx) => {
-      const property = await tx.property.create({
-        data: { organisationId, ...input },
-      });
+      const property = await withPublicReference('PROP', (publicReference) =>
+        tx.property.create({
+          data: {
+            organisationId,
+            publicReference,
+            ...input,
+            ...(strataStatus ? { strataStatus } : {}),
+          },
+        }),
+      );
 
       await recordActivity(tx, {
         organisationId,
@@ -266,10 +283,21 @@ export class PropertiesService {
       }
     }
 
+    // Keeps isStrataManaged and strataStatus from ever diverging (M11-B.1)
+    // — resolved against this property's actual current status, so a
+    // legacy caller can never independently create isStrataManaged=true +
+    // strataStatus=NOT_ENABLED, or isStrataManaged=false + strataStatus=
+    // ACTIVE. Throws if this update would disable an already-ACTIVE
+    // scheme, since no destructive disable action exists yet.
+    const strataStatus =
+      input.isStrataManaged !== undefined
+        ? resolveLegacyIsStrataManagedTransition(existing.strataStatus, input.isStrataManaged)
+        : undefined;
+
     return this.prisma.$transaction(async (tx) => {
       const property = await tx.property.update({
         where: { id: propertyId },
-        data: input,
+        data: { ...input, ...(strataStatus ? { strataStatus } : {}) },
       });
 
       await recordActivity(tx, {

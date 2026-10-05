@@ -1,7 +1,9 @@
-import type { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
 import { recordActivity } from '../activity/activity.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '../../errors/AppError.js';
 import { env } from '../../config/env.js';
+import { withPublicReference } from '../../lib/public-reference.js';
 import { logger } from '../../lib/logger.js';
 import { presignGet, presignPut } from '../../lib/s3.js';
 import { generateVariationAcceptanceDocument } from '../../lib/quoteAcceptanceDocument.js';
@@ -11,7 +13,11 @@ import {
   ApprovalPolicyService,
   meetsOrExceedsRequirement,
 } from '../approval-policy/approval-policy.service.js';
-import { canReleaseWorkOrder, deriveWorkflowResult, mapWaslSignEventToSignatureStatus } from '../quotes/workflow-result.js';
+import {
+  canReleaseWorkOrder,
+  deriveWorkflowResult,
+  mapWaslSignEventToSignatureStatus,
+} from '../quotes/workflow-result.js';
 import type {
   CreateVariationInput,
   PresignVariationAttachmentInput,
@@ -25,7 +31,9 @@ const variationInclude = {
   approvedByUser: { select: { id: true, firstName: true, lastName: true } },
 } as const;
 
-type VariationWithInclude = Prisma.WorkOrderVariationGetPayload<{ include: typeof variationInclude }>;
+type VariationWithInclude = Prisma.WorkOrderVariationGetPayload<{
+  include: typeof variationInclude;
+}>;
 
 /** A variation's signature workflow needs a real work order — its
  * property/space/contractor context for the document, and to know who to
@@ -132,16 +140,33 @@ export class WorkOrderVariationsService {
 
     const approved = variations.filter((v) => v.status === 'APPROVED');
     const pending = variations.filter((v) => v.status === 'PENDING_APPROVAL');
-    const approvedTotal = approved.reduce((sum, v) => sum + Number(v.amountDelta), 0);
-    const pendingTotal = pending.reduce((sum, v) => sum + Number(v.amountDelta), 0);
-    const originalAmount = workOrder.estimatedCost != null ? Number(workOrder.estimatedCost) : 0;
+    // Summed as Prisma.Decimal (exact base-10 arithmetic, same engine the
+    // DB column itself uses), never plain JS numbers — this feeds
+    // WaslSign's legal/commercial variation documents, where a
+    // floating-point drift of even a single cent (e.g. 0.1 + 0.2 !==
+    // 0.3 in IEEE-754) is a real correctness defect, not cosmetic.
+    // Converted to Number only at the very end, to keep this endpoint's
+    // existing numeric response contract unchanged.
+    const approvedTotalDecimal = approved.reduce(
+      (sum, v) => sum.plus(v.amountDelta),
+      new Prisma.Decimal(0),
+    );
+    const pendingTotalDecimal = pending.reduce(
+      (sum, v) => sum.plus(v.amountDelta),
+      new Prisma.Decimal(0),
+    );
+    const originalAmountDecimal =
+      workOrder.estimatedCost != null
+        ? new Prisma.Decimal(workOrder.estimatedCost)
+        : new Prisma.Decimal(0);
+    const authorisedTotalDecimal = originalAmountDecimal.plus(approvedTotalDecimal);
 
     return {
       currencyCode: workOrder.currencyCode,
-      originalAmount,
-      approvedVariationsTotal: approvedTotal,
-      pendingVariationsTotal: pendingTotal,
-      authorisedTotal: originalAmount + approvedTotal,
+      originalAmount: originalAmountDecimal.toNumber(),
+      approvedVariationsTotal: approvedTotalDecimal.toNumber(),
+      pendingVariationsTotal: pendingTotalDecimal.toNumber(),
+      authorisedTotal: authorisedTotalDecimal.toNumber(),
       approvedVariationCount: approved.length,
       pendingVariationCount: pending.length,
     };
@@ -174,26 +199,30 @@ export class WorkOrderVariationsService {
     );
 
     return this.prisma.$transaction(async (tx) => {
-      const variation = await tx.workOrderVariation.create({
-        data: {
-          organisationId,
-          workOrderId,
-          description: input.description,
-          amountDelta: input.amountDelta,
-          currencyCode: workOrder.currencyCode,
-          status: 'PENDING_APPROVAL',
-          recordedByUserId: actorUserId,
-          requiredWorkflowMode: resolution.workflowMode,
-          approvalPolicySnapshot: resolution as unknown as Prisma.InputJsonValue,
-          // A pre-selected suggestion only, exactly like
-          // QuotesService.create — nothing starts until a manager confirms
-          // via setWorkflowMode. Null (no policy/currency mismatch) means
-          // no suggestion; the manager must choose explicitly, never
-          // silently NONE (see setWorkflowMode/approve's null handling).
-          workflowMode: resolution.workflowMode ?? undefined,
-        },
-        include: variationInclude,
-      });
+      const variation = await withPublicReference('VAR', (publicReference) =>
+        tx.workOrderVariation.create({
+          data: {
+            organisationId,
+            publicReference,
+            workOrderId,
+            description: input.description,
+            amountDelta: input.amountDelta,
+            currencyCode: workOrder.currencyCode,
+            status: 'PENDING_APPROVAL',
+            recordedByUserId: actorUserId,
+            requiredWorkflowMode: resolution.workflowMode,
+            approvalPolicySnapshot: resolution as unknown as Prisma.InputJsonValue,
+            // A pre-selected suggestion only, exactly like
+            // QuotesService.create — nothing starts until a manager
+            // confirms via setWorkflowMode. Null (no policy/currency
+            // mismatch) means no suggestion; the manager must choose
+            // explicitly, never silently NONE (see setWorkflowMode/
+            // approve's null handling).
+            workflowMode: resolution.workflowMode ?? undefined,
+          },
+          include: variationInclude,
+        }),
+      );
 
       await recordActivity(tx, {
         organisationId,
@@ -257,8 +286,17 @@ export class WorkOrderVariationsService {
     }
 
     if (input.workflowMode === 'SIGNATURE_ONLY') {
-      const workOrder = await this.getOwnedWorkOrderWithContext(organisationId, variation.workOrderId);
-      return this.startSignatureWorkflow(organisationId, actorUserId, variation, workOrder, 'SIGNATURE_ONLY');
+      const workOrder = await this.getOwnedWorkOrderWithContext(
+        organisationId,
+        variation.workOrderId,
+      );
+      return this.startSignatureWorkflow(
+        organisationId,
+        actorUserId,
+        variation,
+        workOrder,
+        'SIGNATURE_ONLY',
+      );
     }
 
     const workOrder = await this.getOwnedWorkOrder(organisationId, variation.workOrderId);
@@ -268,7 +306,8 @@ export class WorkOrderVariationsService {
         data: {
           workflowMode: input.workflowMode,
           approvalStatus:
-            input.workflowMode === 'APPROVAL_ONLY' || input.workflowMode === 'APPROVAL_THEN_SIGNATURE'
+            input.workflowMode === 'APPROVAL_ONLY' ||
+            input.workflowMode === 'APPROVAL_THEN_SIGNATURE'
               ? 'PENDING'
               : undefined,
         },
@@ -417,7 +456,10 @@ export class WorkOrderVariationsService {
     // QuotesService.reject exactly. A variation with no confirmed
     // workflow yet (workflowMode null) can still be rejected outright —
     // there is no approval-gate state to invalidate first.
-    if (variation.workflowMode === 'APPROVAL_ONLY' || variation.workflowMode === 'APPROVAL_THEN_SIGNATURE') {
+    if (
+      variation.workflowMode === 'APPROVAL_ONLY' ||
+      variation.workflowMode === 'APPROVAL_THEN_SIGNATURE'
+    ) {
       if (variation.approvalStatus !== 'PENDING') {
         throw new ConflictError(
           `Approval already ${variation.approvalStatus?.toLowerCase() ?? 'resolved'}`,
@@ -432,7 +474,8 @@ export class WorkOrderVariationsService {
           status: 'REJECTED',
           rejectedAt: new Date(),
           approvalStatus:
-            variation.workflowMode === 'APPROVAL_ONLY' || variation.workflowMode === 'APPROVAL_THEN_SIGNATURE'
+            variation.workflowMode === 'APPROVAL_ONLY' ||
+            variation.workflowMode === 'APPROVAL_THEN_SIGNATURE'
               ? 'REJECTED'
               : undefined,
         },
@@ -560,7 +603,9 @@ export class WorkOrderVariationsService {
       );
     }
     if (!workOrder.contractor) {
-      throw new ConflictError('Cannot start a signature workflow: this work order has no contractor assigned');
+      throw new ConflictError(
+        'Cannot start a signature workflow: this work order has no contractor assigned',
+      );
     }
 
     const organisation = await this.prisma.organisation.findUniqueOrThrow({
@@ -653,7 +698,10 @@ export class WorkOrderVariationsService {
       });
     } catch (err) {
       if (err instanceof WaslSignServiceError) {
-        logger.error({ err, variationId: variation.id }, 'Failed to start WaslSign workflow for a variation');
+        logger.error(
+          { err, variationId: variation.id },
+          'Failed to start WaslSign workflow for a variation',
+        );
         throw new ConflictError(`Could not start the signature workflow: ${err.message}`);
       }
       throw err;
@@ -728,7 +776,11 @@ export class WorkOrderVariationsService {
     }
 
     const workOrder = await this.getOwnedWorkOrder(variation.organisationId, variation.workOrderId);
-    const result = deriveWorkflowResult(variation.workflowMode, variation.approvalStatus, signatureStatus);
+    const result = deriveWorkflowResult(
+      variation.workflowMode,
+      variation.approvalStatus,
+      signatureStatus,
+    );
     const nowCompleting = canReleaseWorkOrder(result) && signatureStatus === 'SIGNED';
     const nowFailing = signatureStatus === 'DECLINED' || signatureStatus === 'EXPIRED';
 
@@ -791,7 +843,9 @@ export class WorkOrderVariationsService {
     await this.getOwnedVariation(organisationId, variationId);
     const maxBytes = env.CREDENTIAL_DOCUMENT_MAX_SIZE_MB * 1024 * 1024;
     if (input.fileSize > maxBytes) {
-      throw new ConflictError(`The document must be ${env.CREDENTIAL_DOCUMENT_MAX_SIZE_MB} MB or smaller`);
+      throw new ConflictError(
+        `The document must be ${env.CREDENTIAL_DOCUMENT_MAX_SIZE_MB} MB or smaller`,
+      );
     }
     const extension = ATTACHMENT_EXTENSION[input.contentType];
     const storageKey = `organisations/${organisationId}/work-order-variations/${variationId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;

@@ -20,7 +20,12 @@ export async function listSavedAudiences(req: Request, res: Response) {
 export async function createSavedAudience(req: Request, res: Response) {
   const auth = requireAuth(req);
   const input = createSavedAudienceSchema.parse(req.body);
-  const audience = await savedAudiencesService.create(auth.organisationId, auth, auth.userId, input);
+  const audience = await savedAudiencesService.create(
+    auth.organisationId,
+    auth,
+    auth.userId,
+    input,
+  );
   res.status(201).json(audience);
 }
 

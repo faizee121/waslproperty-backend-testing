@@ -34,6 +34,7 @@ export async function getCurrentOrganisation(req: Request, res: Response) {
     currencyCode: organisation.currencyCode,
     countryCode: organisation.countryCode,
     features: resolveOrganisationFeatures(organisation.countryCode),
+    aiEnabled: organisation.aiEnabled,
     orgRole: req.auth.orgRole,
     accountType: req.auth.orgRole ? 'staff' : 'resident',
     propertyContactId: req.auth.propertyContactId ?? null,
@@ -59,6 +60,7 @@ export async function updateOrganisation(req: Request, res: Response) {
     data: {
       ...(input.currencyCode !== undefined && { currencyCode: input.currencyCode }),
       ...(input.countryCode !== undefined && { countryCode: input.countryCode }),
+      ...(input.aiEnabled !== undefined && { aiEnabled: input.aiEnabled }),
     },
   });
 
@@ -70,5 +72,6 @@ export async function updateOrganisation(req: Request, res: Response) {
     currencyCode: organisation.currencyCode,
     countryCode: organisation.countryCode,
     features: resolveOrganisationFeatures(organisation.countryCode),
+    aiEnabled: organisation.aiEnabled,
   });
 }

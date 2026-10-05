@@ -35,6 +35,14 @@ model Organisation {
   /// Nullable — provisioning happens lazily, on first need for a signed document, not at signup.
   waslSignOrganisationId String? @unique
 
+  /// Org-level Wasl AI kill switch — OWNER/ADMIN only, via PATCH
+  /// /organisations/me (see organisations.schemas.ts). Effective AI
+  /// availability is this AND the platform-wide AI_ENABLED env var AND the
+  /// requesting user holding the `ai.use` capability — all three, never
+  /// just one (see src/modules/ai/ai.service.ts isAiAvailableForUser).
+  /// Defaults false: an organisation must opt in, never silently on.
+  aiEnabled Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -62,6 +70,10 @@ model Organisation {
   workOrderVariationAttachments    WorkOrderVariationAttachment[]
   approvalPolicy                   OrganisationApprovalPolicy?
   approvalPolicyRules              ApprovalPolicyRule[]
+  aiConversations                  AiConversation[]
+  aiAuditEvents                    AiAuditEvent[]
+  propertyDocuments                PropertyDocument[]
+  documentAnalyses                 DocumentAnalysis[]
 
   @@map("organisations")
 }
@@ -105,6 +117,10 @@ model User {
   uploadedWorkOrderVariationAttachments WorkOrderVariationAttachment[]
   createdApprovalPolicies               OrganisationApprovalPolicy[]      @relation("ApprovalPolicyCreatedBy")
   updatedApprovalPolicies               OrganisationApprovalPolicy[]      @relation("ApprovalPolicyUpdatedBy")
+  aiConversations                       AiConversation[]
+  aiAuditEvents                         AiAuditEvent[]
+  uploadedPropertyDocuments             PropertyDocument[]                @relation("PropertyDocumentUploadedBy")
+  confirmedPropertyDocuments            PropertyDocument[]                @relation("PropertyDocumentConfirmedBy")
 
   @@map("users")
 }
@@ -279,32 +295,57 @@ model PlatformAuditEvent {
 // --- Property Foundation (Slice 1 / M3-M4) ---
 
 model Property {
-  id             String         @id @default(cuid())
-  organisationId String
-  name           String
-  code           String
-  addressLine1   String
-  addressLine2   String?
-  city           String
-  state          String?
-  country        String
-  postalCode     String?
-  propertyType   PropertyType
-  status         PropertyStatus @default(ACTIVE)
+  id              String         @id @default(cuid())
+  /// Short, immutable, customer-facing reference (e.g. "PROP-K7M4Q2") —
+  /// see src/lib/public-reference.ts. Never the primary key, never used in
+  /// FK relationships; purely the external identity shown in URLs, AI
+  /// references, and operational text. Was nullable for one migration
+  /// while prisma/backfill-public-references.ts filled in pre-existing
+  /// rows; NOT NULL from migration 20261004092405_require_public_references
+  /// onward.
+  publicReference String         @unique
+  organisationId  String
+  name            String
+  code            String
+  addressLine1    String
+  addressLine2    String?
+  city            String
+  state           String?
+  country         String
+  postalCode      String?
+  propertyType    PropertyType
+  status          PropertyStatus @default(ACTIVE)
 
   /// Foundational strata metadata (M11-A) — safe to store regardless of
   /// jurisdiction, but only settable when the owning Organisation has the
   /// STRATA_MANAGEMENT feature (see organisation-features.ts); enforced in
   /// PropertiesService, not just hidden in the UI. Never used to calculate
   /// anything — no levy/fund logic reads these fields.
-  isStrataManaged  Boolean @default(false)
+  isStrataManaged                      Boolean      @default(false)
   /// The scheme/strata plan registration number (e.g. an Australian "SP"
   /// number) — an identifying reference only, not validated against any
   /// jurisdiction's registry.
-  strataPlanNumber String?
+  strataPlanNumber                     String?
   /// Optional display name for the scheme (e.g. "Owners Corporation SP12345"),
   /// independent of Property.name.
-  strataSchemeName String?
+  strataSchemeName                     String?
+  /// Where this property sits in the guided "Enable Strata Management"
+  /// setup flow (M11-B) — NOT_ENABLED/SETUP_IN_PROGRESS/ACTIVE. Distinct
+  /// from isStrataManaged (M11-A, unchanged): isStrataManaged is a plain
+  /// flag any caller can still set directly via PATCH; strataStatus is
+  /// only ever advanced by StrataService's guided setup endpoints, which
+  /// also set isStrataManaged=true once the scheme reaches ACTIVE (the
+  /// same flag SpacesService already gates isStrataLot on). A property
+  /// created before M11-B, or one only ever touched via the old raw PATCH
+  /// field, simply stays NOT_ENABLED here — never inferred from
+  /// isStrataManaged in reverse.
+  strataStatus                         StrataStatus @default(NOT_ENABLED)
+  /// The Total Units of Entitlement declared on the Strata Plan document,
+  /// used only as a reconciliation target for SUM(Space.entitlementValue)
+  /// across this property's strata lots (see strata.calculations.ts) —
+  /// never itself the calculated total, and never read by any levy/fund
+  /// logic (none exists yet). Null until recorded during setup.
+  strataPlanDeclaredUnitsOfEntitlement Decimal?     @db.Decimal(12, 2)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -316,6 +357,10 @@ model Property {
   maintenanceRequests MaintenanceRequest[]
   workOrders          WorkOrder[]
   quoteRounds         QuoteRound[]
+  /// Reverse of PropertyDocument.createdPropertyId — set only for a
+  /// property created via the M15 AI-assisted strata onboarding flow.
+  /// Null for every property created the ordinary manual way.
+  createdFromDocument PropertyDocument?
 
   @@unique([organisationId, code])
   @@index([organisationId])
@@ -334,33 +379,70 @@ enum PropertyStatus {
   ARCHIVED
 }
 
+/// The guided "Enable Strata Management" setup flow's state (M11-B) — see
+/// Property.strataStatus's own doc comment. No disable/deactivate
+/// transition exists yet (see the M11-B requirements: no destructive
+/// disabling until real financial/strata history exists to protect).
+enum StrataStatus {
+  NOT_ENABLED
+  SETUP_IN_PROGRESS
+  ACTIVE
+}
+
+/// Whether a Space in a strata-managed Property is an independent strata
+/// Lot/Unit, a Common Property/Area, or not yet classified (M11-B.1). A
+/// physical Space is never assumed to be a Lot just because it exists or
+/// is named like one ("Lot 4" as a name proves nothing) — the Strata Plan
+/// is the only source of truth for what's actually a Lot, so this is
+/// always an explicit, human-made choice, never inferred. Meaningless
+/// (and always UNCLASSIFIED) for a Space on a non-strata Property — see
+/// SpacesService for where that's enforced. Kept in sync with the legacy
+/// `isStrataLot` boolean by SpacesService/StrataService centrally (never
+/// two independently-writable sources of truth) — see
+/// resolveLegacySpaceClassificationTransition.
+enum SpaceStrataClassification {
+  UNCLASSIFIED
+  LOT
+  COMMON_PROPERTY
+}
+
 /// A generic leasable/occupiable unit within a property. Deliberately not
 /// named "Unit" so the domain stays generic across residential, commercial,
 /// retail, mixed-use, villas, parking, storage and common areas. The UI may
 /// still label these "Units" for residential properties.
 model Space {
-  id             String      @id @default(cuid())
-  organisationId String
-  propertyId     String
-  name           String
-  code           String
-  spaceType      SpaceType
-  floor          String?
-  sizeSqft       Int?
-  status         SpaceStatus @default(VACANT)
+  id              String      @id @default(cuid())
+  /// See Property.publicReference's doc comment — same system, "LOT"
+  /// prefix (covers both strata lots and non-strata spaces/units).
+  publicReference String      @unique
+  organisationId  String
+  propertyId      String
+  name            String
+  code            String
+  spaceType       SpaceType
+  floor           String?
+  sizeSqft        Int?
+  status          SpaceStatus @default(VACANT)
 
   /// Foundational strata lot metadata (M11-A) — see Property.isStrataManaged.
   /// A space can only be marked a strata lot when its Property is itself
-  /// isStrataManaged (enforced in SpacesService). entitlementValue is stored
-  /// as informational data only — it is never read by any calculation.
-  isStrataLot      Boolean  @default(false)
+  /// isStrataManaged (enforced in SpacesService). Kept in sync with
+  /// strataClassification (M11-B.1): true if and only if
+  /// strataClassification is LOT — see SpacesService/StrataService.
+  isStrataLot          Boolean                   @default(false)
   /// The strata lot/unit number, distinct from the generic `code` field
-  /// used across every property type.
-  lotNumber        String?
-  /// Unit entitlement, if known — purely informational until confirmed
-  /// business rules exist for how it should be used (see M11 requirements
-  /// doc). Not used in any calculation.
-  entitlementValue Decimal? @db.Decimal(12, 2)
+  /// used across every property type. Only meaningful when
+  /// strataClassification is LOT.
+  lotNumber            String?
+  /// Units of Entitlement — the real, calculated figure once
+  /// strataClassification is LOT (see strata.calculations.ts). Null/unused
+  /// for COMMON_PROPERTY and UNCLASSIFIED spaces; never read by any
+  /// calculation for those.
+  entitlementValue     Decimal?                  @db.Decimal(12, 2)
+  /// LOT / COMMON_PROPERTY / UNCLASSIFIED (M11-B.1) — see the enum's own
+  /// doc comment. Always UNCLASSIFIED (and irrelevant) for a Space whose
+  /// Property isn't strata-managed.
+  strataClassification SpaceStrataClassification @default(UNCLASSIFIED)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -372,6 +454,18 @@ model Space {
   workOrders          WorkOrder[]
   quoteRounds         QuoteRound[]
 
+  /// A strata lot number must be unique within its Property (never
+  /// enforced across properties) — distinct from `code` above, which is
+  /// Space's own separate general-purpose unique identifier. Prisma's
+  /// schema DSL has no way to express a PARTIAL unique index (lotNumber is
+  /// legitimately NULL for every non-lot Space — COMMON_PROPERTY,
+  /// UNCLASSIFIED, and every space on a non-strata property — and NULLs
+  /// must never collide with each other), so this is NOT declared as a
+  /// Prisma `@@unique` here; it is enforced purely via a hand-written
+  /// migration (see prisma/migrations/20261005100000_add_space_lot_number_unique_index)
+  /// creating `CREATE UNIQUE INDEX ... WHERE "lotNumber" IS NOT NULL`. Any
+  /// future schema change must not assume this constraint doesn't exist
+  /// just because it isn't visible here.
   @@unique([propertyId, code])
   @@index([organisationId])
   @@index([propertyId])
@@ -614,6 +708,44 @@ enum ActivityEventType {
   /// any of the three workflow paths (NONE / APPROVAL_ONLY /
   /// APPROVAL_THEN_SIGNATURE) — see WorkOrderVariationsService.
   WORK_ORDER_VARIATION_AUTHORISED
+  /// The property entered the guided "Enable Strata Management" flow
+  /// (NOT_ENABLED -> SETUP_IN_PROGRESS) — fired once, not on every field
+  /// edit made while still in setup (see StrataPlanConfigured below for
+  /// that).
+  STRATA_ENABLED
+  /// The Strata Plan's own fields (number, scheme name, declared total
+  /// UOE) were set/changed — one coarse event, matching the existing
+  /// APPROVAL_POLICY_UPDATED/CONTRACTOR_COMPLIANCE_REQUIREMENTS_UPDATED
+  /// precedent rather than one event per field.
+  STRATA_PLAN_CONFIGURED
+  /// One or more lots' Units of Entitlement were set/changed in a single
+  /// save (the wizard's bulk "Lots & Units" step, or a later edit) — one
+  /// event per save, never one per lot, to avoid a noisy trail when
+  /// entering 100+ lots.
+  STRATA_ENTITLEMENTS_UPDATED
+  /// A warning signal only, never a block: a lot/UOE or classification
+  /// edit on an already-ACTIVE scheme left SUM(lot UOE) no longer equal
+  /// to the declared Strata Plan total. completeSetup() enforces this as
+  /// a hard gate before a scheme may ever BECOME ACTIVE; once ACTIVE,
+  /// legitimate edits (a lot's entitlement correction, a reclassification)
+  /// must still be allowed, so this fires instead of blocking, giving
+  /// staff an explicit, visible prompt to reconcile rather than a silent
+  /// divergence only noticed if someone happens to check the summary.
+  STRATA_RECONCILIATION_MISMATCH
+  /// SETUP_IN_PROGRESS -> ACTIVE — the guided setup flow's final step.
+  STRATA_SETUP_COMPLETED
+  /// M15 — AI-assisted strata onboarding lifecycle. These are
+  /// document-level events (no propertyId yet, since no Property exists
+  /// until STRATA_PROPERTY_CREATED_FROM_PLAN) except the last one, which
+  /// is also the familiar PROPERTY_CREATED-style event but fired on the
+  /// resulting property. One event per lifecycle stage, never one per
+  /// extracted field.
+  STRATA_PLAN_UPLOADED
+  STRATA_PLAN_ANALYSIS_STARTED
+  STRATA_PLAN_ANALYSIS_COMPLETED
+  STRATA_PLAN_ANALYSIS_FAILED
+  STRATA_PLAN_CONFIRMED
+  STRATA_PROPERTY_CREATED_FROM_PLAN
 }
 
 // --- Resident invitations (Slice 2 / M6.5) ---
@@ -658,6 +790,8 @@ enum ContactInviteStatus {
 /// a work order (later) is the work actually dispatched to resolve it.
 model MaintenanceRequest {
   id               String  @id @default(cuid())
+  /// See Property.publicReference's doc comment — "MR" prefix.
+  publicReference  String  @unique
   organisationId   String
   propertyId       String
   spaceId          String?
@@ -768,6 +902,8 @@ model MaintenanceRequestAttachment {
 /// order directly (e.g. planned/preventive work with no originating report).
 model WorkOrder {
   id                   String  @id @default(cuid())
+  /// See Property.publicReference's doc comment — "WO" prefix.
+  publicReference      String  @unique
   organisationId       String
   propertyId           String
   spaceId              String?
@@ -1149,7 +1285,7 @@ model ContractorQuote {
   /// Immutable afterwards: a later change to the organisation's policy must
   /// never rewrite this historical decision (see ApprovalPolicyService's
   /// own doc comment).
-  requiredWorkflowMode WorkflowMode?
+  requiredWorkflowMode   WorkflowMode?
   /// Frozen explanation of the resolution above (matched rule's band,
   /// currency, human-readable reason) — see ApprovalPolicyResolution in
   /// approval-policy.service.ts. Kept as JSON, not a live FK to
@@ -1317,7 +1453,7 @@ model ApprovalPolicyRule {
   policyId       String
 
   /// Inclusive lower bound, in the policy's currencyCode.
-  minAmount Decimal @db.Decimal(12, 2)
+  minAmount Decimal  @db.Decimal(12, 2)
   /// Inclusive upper bound; null = open-ended ("above X") — exactly one
   /// rule per policy may have this null, and it must be the highest band.
   maxAmount Decimal? @db.Decimal(12, 2)
@@ -1369,6 +1505,8 @@ enum QuoteRoundStatus {
 /// actually saw, never silently changing under them.
 model QuoteRound {
   id                   String  @id @default(cuid())
+  /// See Property.publicReference's doc comment — "RFQ" prefix.
+  publicReference      String  @unique
   organisationId       String
   propertyId           String
   spaceId              String?
@@ -1494,9 +1632,13 @@ enum WorkOrderVariationStatus {
 /// evidence); the authorised total is always original amount + APPROVED
 /// variations only, computed at read time, never stored.
 model WorkOrderVariation {
-  id             String @id @default(cuid())
-  organisationId String
-  workOrderId    String
+  id              String @id @default(cuid())
+  /// See Property.publicReference's doc comment — "VAR" prefix. Display/AI
+  /// reference only today; no standalone customer-facing route exists for
+  /// a variation (always shown nested inside its Work Order).
+  publicReference String @unique
+  organisationId  String
+  workOrderId     String
 
   description  String
   amountDelta  Decimal @db.Decimal(10, 2)
@@ -1523,10 +1665,10 @@ model WorkOrderVariation {
   /// variation can now only reach APPROVED once every gate this implies
   /// has actually completed — see WorkOrderVariationsService.approve /
   /// handleWaslSignCallback.
-  workflowMode    WorkflowMode?
-  approvalStatus  ApprovalStatus?
-  signatureStatus SignatureStatus?
-  signedAt        DateTime?
+  workflowMode        WorkflowMode?
+  approvalStatus      ApprovalStatus?
+  signatureStatus     SignatureStatus?
+  signedAt            DateTime?
   /// Populated only once a SIGNATURE_ONLY / APPROVAL_THEN_SIGNATURE
   /// signature workflow has actually been started — same WaslSign
   /// integration ContractorQuote uses, never a second implementation.
@@ -1611,12 +1753,14 @@ enum DeliveryStatus {
 /// CommunicationDelivery for the per-recipient, per-channel audit trail
 /// captured at send time.
 model Communication {
-  id             String                 @id @default(cuid())
-  organisationId String
-  title          String
-  body           String
-  status         CommunicationStatus    @default(DRAFT)
-  channels       CommunicationChannel[]
+  id              String                 @id @default(cuid())
+  /// See Property.publicReference's doc comment — "COM" prefix.
+  publicReference String                 @unique
+  organisationId  String
+  title           String
+  body            String
+  status          CommunicationStatus    @default(DRAFT)
+  channels        CommunicationChannel[]
 
   /// Structured targeting rule, not a frozen recipient list — e.g.
   /// {"scope":"PROPERTY","propertyIds":[...],"roles":[...],"includeContactIds":[...]}.
@@ -1666,6 +1810,10 @@ model CommunicationRecipient {
   @@index([communicationId])
   @@index([contactId])
   @@index([userId])
+  /// Backs get_communication_timeline's `WHERE propertyId = ? AND
+  /// communication...` lookup (src/modules/ai/tools/tools.ts) — without
+  /// it, every call scans the full table rather than one property's rows.
+  @@index([propertyId])
   @@map("communication_recipients")
 }
 
@@ -1753,4 +1901,276 @@ model Notification {
   @@index([organisationId, userId, readAt])
   @@index([userId, createdAt])
   @@map("notifications")
+}
+
+// --- Wasl AI (M14) ---
+//
+// Deliberately channel-agnostic even though only WEB is active today — see
+// src/modules/ai/ai.types.ts and the M14 final report's "Channel-Agnostic
+// Architecture" section. WHATSAPP/MOBILE/API are reserved enum values with
+// no adapter behind them yet; adding one must never require a schema
+// change here.
+
+enum AiChannel {
+  WEB
+  WHATSAPP
+  MOBILE
+  API
+}
+
+enum AiMessageRole {
+  USER
+  ASSISTANT
+}
+
+/// One conversation thread. A WhatsApp phone number (or any other
+/// channel-native identity) is never itself the WaslProp identity — every
+/// row here already carries a resolved userId, meaning identity
+/// verification/linking to a real User happened upstream of this model,
+/// never inside it. See externalConversationRef's own doc comment.
+model AiConversation {
+  id             String    @id @default(cuid())
+  organisationId String
+  userId         String
+  channel        AiChannel @default(WEB)
+
+  /// Opaque external thread identity for a non-WEB channel (e.g. a
+  /// WhatsApp conversation id) — carried for routing only, never consulted
+  /// for authorization or identity. Null for WEB, where the session token
+  /// already is the identity.
+  externalConversationRef String?
+
+  /// The resource (if any) this conversation was opened scoped to — e.g.
+  /// "Investigate with Wasl AI" from a Maintenance Request. Carried so
+  /// follow-up turns keep the same investigation context without the
+  /// frontend resending it every message. Independent of channel — a
+  /// future WhatsApp reply to a notification about the same resource could
+  /// attach identical context.
+  contextResourceType String?
+  contextResourceId   String?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  lastActiveAt DateTime @default(now())
+
+  organisation Organisation   @relation(fields: [organisationId], references: [id])
+  user         User           @relation(fields: [userId], references: [id])
+  messages     AiMessage[]
+  auditEvents  AiAuditEvent[]
+
+  @@index([organisationId, userId, lastActiveAt])
+  @@map("ai_conversations")
+}
+
+/// A single turn. Deliberately bounded/shallow — only the user's message
+/// and the assistant's final answer are persisted, never the intermediate
+/// tool-call exchange or any chain-of-thought (see AiOrchestrator). A
+/// USER row's structuredResponse is always null.
+model AiMessage {
+  id             String        @id @default(cuid())
+  conversationId String
+  role           AiMessageRole
+  content        String
+
+  /// The channel-neutral AiResponse (sections/findings/resources/
+  /// suggestedActions) for an ASSISTANT message — null for USER. WEB
+  /// renders this richly; a future channel renders a reduced form from the
+  /// same evidence, never a separately-generated answer.
+  structuredResponse Json?
+
+  createdAt DateTime @default(now())
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id])
+
+  @@index([conversationId, createdAt])
+  @@map("ai_messages")
+}
+
+/// Every AI turn's audit trail — deliberately metadata-only. Never a full
+/// payload dump, never chain-of-thought, never secrets: see
+/// src/modules/ai/audit/ai-audit.service.ts's own doc comment for exactly
+/// what is and isn't written here.
+model AiAuditEvent {
+  id             String    @id @default(cuid())
+  organisationId String
+  userId         String
+  conversationId String?
+  channel        AiChannel
+  provider       String
+  model          String
+
+  /// Tool names invoked this turn, in call order — never arguments or
+  /// results.
+  toolNames String[]
+
+  targetResourceType String?
+  targetResourceId   String?
+
+  success   Boolean
+  latencyMs Int
+
+  inputTokens  Int?
+  outputTokens Int?
+
+  /// Set only when a guardrail actually fired this turn — e.g.
+  /// "BUDGET_EXCEEDED", "UNKNOWN_TOOL_REJECTED", "RATE_LIMITED",
+  /// "MALFORMED_RESPONSE". Null on an unremarkable successful turn.
+  guardrailEvent String?
+  errorCode      String?
+
+  createdAt DateTime @default(now())
+
+  organisation Organisation    @relation(fields: [organisationId], references: [id])
+  user         User            @relation(fields: [userId], references: [id])
+  conversation AiConversation? @relation(fields: [conversationId], references: [id])
+
+  @@index([organisationId, createdAt])
+  @@index([userId, createdAt])
+  @@map("ai_audit_events")
+}
+
+// --- Property Document Intelligence (M15) ---
+//
+// A reusable foundation, not an NSW-strata-specific model: PropertyDocument
+// is deliberately generic (any future document type — other states' strata
+// plans, insurance certificates, management agreements — reuses this same
+// model, see PropertyDocumentType). DocumentAnalysis is append-only: each
+// row is one analysis ATTEMPT (never mutated afterward, never deleted),
+// so a document can be reprocessed later with an improved extractor
+// without destroying the history of what an earlier attempt found — see
+// the M15 final report's "reprocessing foundation" section. Authoritative
+// Property/Space/UOE data is never written by anything in this section —
+// only PropertyDocumentOnboardingService.confirm (see property-documents
+// module) ever creates those, and only from PropertyDocument.draft after
+// explicit user confirmation.
+
+/// Extensible document-type catalogue — the ONLY type implemented in M15
+/// is NSW_STRATA_PLAN. A future document type is added here, never
+/// inferred from a filename/extension (see classification.ts's own doc
+/// comment).
+enum PropertyDocumentType {
+  NSW_STRATA_PLAN
+}
+
+/// The document's own lifecycle — what the frontend polls while waiting
+/// for analysis, and what an upload/review screen branches on.
+/// REVIEW_REQUIRED and READY both land on the same human review screen;
+/// READY only means the latest analysis produced zero blocking issues to
+/// start with. Neither is reachable until an analysis attempt has
+/// actually completed (see DocumentAnalysisStatus below).
+enum PropertyDocumentStatus {
+  UPLOADED
+  ANALYSING
+  REVIEW_REQUIRED
+  READY
+  FAILED
+  CONFIRMED
+}
+
+/// One uploaded source document — the durable object everything else
+/// hangs off. Storage bytes live in S3 (see lib/s3.ts); this row is only
+/// ever metadata + a storage key, mirroring MaintenanceRequestAttachment.
+model PropertyDocument {
+  id               String @id @default(cuid())
+  organisationId   String
+  uploadedByUserId String
+
+  /// Null until classification actually runs — see DocumentAnalysis.
+  documentType PropertyDocumentType?
+  status       PropertyDocumentStatus @default(UPLOADED)
+
+  storageKey  String
+  fileName    String
+  contentType String
+  fileSize    Int
+  pageCount   Int?
+
+  /// The CURRENT editable review state — property fields + lots[] — seeded
+  /// from the latest successful DocumentAnalysis.extraction once analysis
+  /// completes, then mutated in place via the review screen's correction
+  /// endpoint (never triggers re-analysis; see StrataPlanDraft in
+  /// property-documents/nsw-strata-plan/draft.types.ts). Null until an
+  /// analysis has produced a usable draft.
+  draft Json?
+
+  /// Set exactly once, at confirmation — the one field that makes
+  /// confirmation idempotent (see PropertyDocumentOnboardingService.confirm:
+  /// a second confirm attempt on an already-confirmed document returns
+  /// this property rather than creating a duplicate). Never set any other
+  /// way.
+  createdPropertyId String?   @unique
+  confirmedByUserId String?
+  confirmedAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organisation    Organisation       @relation(fields: [organisationId], references: [id])
+  uploadedBy      User               @relation("PropertyDocumentUploadedBy", fields: [uploadedByUserId], references: [id])
+  confirmedBy     User?              @relation("PropertyDocumentConfirmedBy", fields: [confirmedByUserId], references: [id])
+  createdProperty Property?          @relation(fields: [createdPropertyId], references: [id])
+  analyses        DocumentAnalysis[]
+
+  @@index([organisationId, createdAt])
+  @@map("property_documents")
+}
+
+enum DocumentAnalysisStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+/// One analysis ATTEMPT — append-only, never mutated after it finishes.
+/// `extraction` is the frozen, provenance-wrapped structured output (see
+/// StrataPlanExtraction) exactly as the extractor/AI produced it; it is
+/// never edited — user corrections live on PropertyDocument.draft instead,
+/// so "what did the document originally say" and "what did the user
+/// confirm" are always both recoverable (M15 Section 30).
+model DocumentAnalysis {
+  id                 String @id @default(cuid())
+  organisationId     String
+  propertyDocumentId String
+
+  status DocumentAnalysisStatus @default(PENDING)
+
+  /// Classification outcome for this attempt — recorded even when below
+  /// the confidence bar required to proceed, so a rejected attempt still
+  /// leaves an audit trail of what was tried and why it was rejected.
+  classifiedDocumentType   PropertyDocumentType?
+  classificationConfidence Float?
+  classificationEvidence   String?
+
+  /// The full structured extraction tree (every business field wrapped as
+  /// an ExtractedField<T> with confidence + source) — see
+  /// property-documents/nsw-strata-plan/extraction.types.ts. Null until
+  /// extraction actually runs/succeeds.
+  extraction Json?
+  /// ValidationIssue[] as computed deterministically against `extraction`
+  /// at the moment analysis completed — a frozen snapshot for audit only;
+  /// the live review screen always recomputes issues from the CURRENT
+  /// PropertyDocument.draft instead (see Section 21: corrections must
+  /// revalidate without re-running AI).
+  issues     Json?
+
+  /// Which provider/model/extractor actually produced this attempt — kept
+  /// for the "reprocessing foundation" requirement; never silently
+  /// overwritten by a later attempt (each attempt is its own row).
+  extractionProvider String?
+  extractionModel    String?
+  ocrEngine          String?
+
+  errorMessage String?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  organisation     Organisation     @relation(fields: [organisationId], references: [id])
+  propertyDocument PropertyDocument @relation(fields: [propertyDocumentId], references: [id])
+
+  @@index([organisationId])
+  @@index([propertyDocumentId, createdAt])
+  @@map("document_analyses")
 }

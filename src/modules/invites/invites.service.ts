@@ -336,7 +336,12 @@ export class InvitesService {
       // PeopleService.findOrCreateContact), but never two contacts within
       // this one.
       const alreadyLinkedInThisOrg = await tx.propertyContact.findUnique({
-        where: { organisationId_userId: { organisationId: contact.organisationId, userId: authenticatedUserId } },
+        where: {
+          organisationId_userId: {
+            organisationId: contact.organisationId,
+            userId: authenticatedUserId,
+          },
+        },
       });
       if (alreadyLinkedInThisOrg && alreadyLinkedInThisOrg.id !== contact.id) {
         throw new ConflictError(

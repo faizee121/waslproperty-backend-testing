@@ -66,9 +66,7 @@ describe('M11-A strata foundation', () => {
   describe('organisation jurisdiction / feature resolution', () => {
     it('a new organisation has no countryCode and no features by default', async () => {
       const { accessToken } = await registerTestUser(app);
-      const res = await request(app)
-        .get('/api/v1/organisations/me')
-        .set(authHeader(accessToken));
+      const res = await request(app).get('/api/v1/organisations/me').set(authHeader(accessToken));
       expect(res.status).toBe(200);
       expect(res.body.countryCode).toBeNull();
       expect(res.body.features).toEqual([]);
@@ -76,9 +74,7 @@ describe('M11-A strata foundation', () => {
 
     it('setting countryCode=AU resolves STRATA_MANAGEMENT in the feature set', async () => {
       const { accessToken } = await registerAuOrg();
-      const res = await request(app)
-        .get('/api/v1/organisations/me')
-        .set(authHeader(accessToken));
+      const res = await request(app).get('/api/v1/organisations/me').set(authHeader(accessToken));
       expect(res.body.countryCode).toBe('AU');
       expect(res.body.features).toContain('STRATA_MANAGEMENT');
     });
@@ -111,9 +107,7 @@ describe('M11-A strata foundation', () => {
       expect(currencyRes.status).toBe(200);
       expect(currencyRes.body.countryCode).toBe('AU');
 
-      const me = await request(app)
-        .get('/api/v1/organisations/me')
-        .set(authHeader(accessToken));
+      const me = await request(app).get('/api/v1/organisations/me').set(authHeader(accessToken));
       expect(me.body.currencyCode).toBe('EUR');
       expect(me.body.features).toContain('STRATA_MANAGEMENT');
     });

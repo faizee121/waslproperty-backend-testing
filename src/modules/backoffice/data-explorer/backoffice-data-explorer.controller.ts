@@ -17,7 +17,13 @@ export async function listDataExplorerModels(_req: Request, res: Response) {
 export async function listDataExplorerRecords(req: Request, res: Response) {
   if (!req.platformAuth) throw new UnauthorizedError();
   const query = dataExplorerListQuerySchema.parse(req.query);
-  res.json(await service.listRecords(req.params.model as string, query, req.platformAuth.platformCapabilities));
+  res.json(
+    await service.listRecords(
+      req.params.model as string,
+      query,
+      req.platformAuth.platformCapabilities,
+    ),
+  );
 }
 
 export async function getDataExplorerRecord(req: Request, res: Response) {

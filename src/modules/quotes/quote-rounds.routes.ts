@@ -6,6 +6,10 @@ import {
   fromQuoteParam,
   fromQuoteRoundParam,
 } from '../../middlewares/resolvePropertyId.js';
+import {
+  resolveMaintenanceRequestReference,
+  resolveQuoteRoundReference,
+} from '../../middlewares/resolvePublicReference.js';
 import { getPrismaClient } from '../../lib/prisma.js';
 import { asyncHandler } from '../../middlewares/asyncHandler.js';
 import {
@@ -42,31 +46,37 @@ quoteRoundsRouter.post(
 );
 quoteRoundsRouter.get(
   '/by-request/:maintenanceRequestId',
+  resolveMaintenanceRequestReference('maintenanceRequestId'),
   requireCapability('quotes.view', fromMaintenanceRequestParam('maintenanceRequestId')),
   asyncHandler(getQuoteRoundByMaintenanceRequest),
 );
 quoteRoundsRouter.get(
   '/by-request/:maintenanceRequestId/eligible-contractors',
+  resolveMaintenanceRequestReference('maintenanceRequestId'),
   requireCapability('quotes.manage', fromMaintenanceRequestParam('maintenanceRequestId')),
   asyncHandler(getEligibleContractorsForRequest),
 );
 quoteRoundsRouter.get(
   '/:id',
+  resolveQuoteRoundReference('id'),
   requireCapability('quotes.view', fromQuoteRoundParam('id')),
   asyncHandler(getQuoteRound),
 );
 quoteRoundsRouter.post(
   '/:id/invitations',
+  resolveQuoteRoundReference('id'),
   requireCapability('quotes.manage', fromQuoteRoundParam('id')),
   asyncHandler(inviteContractors),
 );
 quoteRoundsRouter.post(
   '/:id/award',
+  resolveQuoteRoundReference('id'),
   requireCapability('quotes.approve', fromQuoteRoundParam('id')),
   asyncHandler(awardQuoteRound),
 );
 quoteRoundsRouter.post(
   '/:id/cancel',
+  resolveQuoteRoundReference('id'),
   requireCapability('quotes.manage', fromQuoteRoundParam('id')),
   asyncHandler(cancelQuoteRound),
 );

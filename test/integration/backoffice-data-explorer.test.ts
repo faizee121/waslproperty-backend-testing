@@ -4,6 +4,7 @@ import { createApp } from '../../src/app.js';
 import { env } from '../../src/config/env.js';
 import { BackofficeDataExplorerService } from '../../src/modules/backoffice/data-explorer/backoffice-data-explorer.service.js';
 import { resetDb, testPrisma } from '../helpers/db.js';
+import { buildPublicReference } from '../../src/lib/public-reference.js';
 import { authHeader, createPlatformUser, registerTestUser } from '../helpers/auth.js';
 
 const app = createApp();
@@ -32,7 +33,9 @@ describe('backoffice data explorer', () => {
       const { username, password } = await createPlatformUser();
       const token = await platformLogin(username, password);
 
-      const res = await request(app).get('/api/v1/backoffice/data-explorer/models').set(authHeader(token));
+      const res = await request(app)
+        .get('/api/v1/backoffice/data-explorer/models')
+        .set(authHeader(token));
       expect(res.status).toBe(200);
       const names = res.body.items.map((m: { model: string }) => m.model);
       expect(names).toContain('Organisation');
@@ -131,7 +134,10 @@ describe('backoffice data explorer', () => {
       const token = await platformLogin(username, password);
       const suspended = `Suspended-Org-${Date.now()}`;
       const { organisationId } = await registerTestUser(app, { organisationName: suspended });
-      await testPrisma.organisation.update({ where: { id: organisationId }, data: { status: 'SUSPENDED' } });
+      await testPrisma.organisation.update({
+        where: { id: organisationId },
+        data: { status: 'SUSPENDED' },
+      });
 
       const res = await request(app)
         .get('/api/v1/backoffice/data-explorer/Organisation/records')
@@ -166,7 +172,9 @@ describe('backoffice data explorer', () => {
         .set(authHeader(token));
       expect(res.status).toBe(200);
       expect(res.body.record.name).toBe('Relation Test Property');
-      const orgRelation = res.body.relations.find((r: { field: string }) => r.field === 'organisation');
+      const orgRelation = res.body.relations.find(
+        (r: { field: string }) => r.field === 'organisation',
+      );
       expect(orgRelation.display).toBeTruthy();
     });
 
@@ -184,7 +192,9 @@ describe('backoffice data explorer', () => {
     it('requires database.edit — PLATFORM_SUPPORT (view-only) is rejected', async () => {
       const { username, password } = await createPlatformUser({ role: 'PLATFORM_SUPPORT' });
       const token = await platformLogin(username, password);
-      const { organisationId } = await registerTestUser(app, { organisationName: 'Edit Reject Org' });
+      const { organisationId } = await registerTestUser(app, {
+        organisationName: 'Edit Reject Org',
+      });
 
       const res = await request(app)
         .patch(`/api/v1/backoffice/data-explorer/Organisation/records/${organisationId}`)
@@ -208,7 +218,9 @@ describe('backoffice data explorer', () => {
     it('rejects editing a real, non-editable field (slug is view-only)', async () => {
       const { username, password } = await createPlatformUser({ role: 'PLATFORM_ADMIN' });
       const token = await platformLogin(username, password);
-      const { organisationId } = await registerTestUser(app, { organisationName: 'Slug Immutable Org' });
+      const { organisationId } = await registerTestUser(app, {
+        organisationName: 'Slug Immutable Org',
+      });
 
       const res = await request(app)
         .patch(`/api/v1/backoffice/data-explorer/Organisation/records/${organisationId}`)
@@ -226,6 +238,7 @@ describe('backoffice data explorer', () => {
       const property = await testPrisma.property.create({
         data: {
           organisationId,
+          publicReference: buildPublicReference('PROP'),
           name: 'WF Property',
           code: `WF-${Date.now()}`,
           addressLine1: '1 St',
@@ -237,10 +250,13 @@ describe('backoffice data explorer', () => {
       const contractor = await testPrisma.contractor.create({
         data: { organisationId, name: 'WF Contractor', email: `wf+${Date.now()}@example.com` },
       });
-      const user = await testPrisma.user.findFirstOrThrow({ where: { organisationMemberships: { some: { organisationId } } } });
+      const user = await testPrisma.user.findFirstOrThrow({
+        where: { organisationMemberships: { some: { organisationId } } },
+      });
       const workOrder = await testPrisma.workOrder.create({
         data: {
           organisationId,
+          publicReference: buildPublicReference('WO'),
           propertyId: property.id,
           title: 'WF Work Order',
           description: 'test',
@@ -249,7 +265,12 @@ describe('backoffice data explorer', () => {
         },
       });
       const quote = await testPrisma.contractorQuote.create({
-        data: { organisationId, workOrderId: workOrder.id, contractorId: contractor.id, amount: '100.00' },
+        data: {
+          organisationId,
+          workOrderId: workOrder.id,
+          contractorId: contractor.id,
+          amount: '100.00',
+        },
       });
       void accessToken;
 
@@ -272,11 +293,17 @@ describe('backoffice data explorer', () => {
       expect(res.status).toBe(200);
       expect(res.body.name).toBe('Renamed Via Explorer');
 
-      const persisted = await testPrisma.organisation.findUniqueOrThrow({ where: { id: organisationId } });
+      const persisted = await testPrisma.organisation.findUniqueOrThrow({
+        where: { id: organisationId },
+      });
       expect(persisted.name).toBe('Renamed Via Explorer');
 
       const audit = await testPrisma.platformAuditEvent.findFirst({
-        where: { action: 'dataExplorer.recordUpdated', entityType: 'Organisation', entityId: organisationId },
+        where: {
+          action: 'dataExplorer.recordUpdated',
+          entityType: 'Organisation',
+          entityId: organisationId,
+        },
       });
       expect(audit?.reason).toBe('fixing a typo');
       expect(audit?.before).toEqual({ name: 'Editable Org' });
@@ -300,7 +327,13 @@ describe('backoffice data explorer', () => {
       const token = await platformLogin(username, password);
       const { organisationId } = await registerTestUser(app, { organisationName: 'PII Edit Org' });
       const contact = await testPrisma.propertyContact.create({
-        data: { organisationId, firstName: 'A', lastName: 'B', phone: '0400000000', email: `pii+${Date.now()}@example.com` },
+        data: {
+          organisationId,
+          firstName: 'A',
+          lastName: 'B',
+          phone: '0400000000',
+          email: `pii+${Date.now()}@example.com`,
+        },
       });
 
       const res = await request(app)
@@ -313,7 +346,13 @@ describe('backoffice data explorer', () => {
     it('rejects editing a PII-sensitive field when the actor lacks pii.view, even if database.edit is present — a service-level guard independent of any real role today', async () => {
       const { organisationId } = await registerTestUser(app, { organisationName: 'PII Guard Org' });
       const contact = await testPrisma.propertyContact.create({
-        data: { organisationId, firstName: 'A', lastName: 'B', phone: '0400000000', email: `pii+${Date.now()}@example.com` },
+        data: {
+          organisationId,
+          firstName: 'A',
+          lastName: 'B',
+          phone: '0400000000',
+          email: `pii+${Date.now()}@example.com`,
+        },
       });
 
       const service = new BackofficeDataExplorerService(testPrisma);
@@ -333,7 +372,9 @@ describe('backoffice data explorer', () => {
     it('requires PLATFORM_SUPER_ADMIN — PLATFORM_ADMIN (has database.edit) is rejected', async () => {
       const { username, password } = await createPlatformUser({ role: 'PLATFORM_ADMIN' });
       const token = await platformLogin(username, password);
-      const { organisationId } = await registerTestUser(app, { organisationName: 'Delete Reject Org' });
+      const { organisationId } = await registerTestUser(app, {
+        organisationName: 'Delete Reject Org',
+      });
 
       const res = await request(app)
         .delete(`/api/v1/backoffice/data-explorer/Organisation/records/${organisationId}`)
@@ -345,7 +386,9 @@ describe('backoffice data explorer', () => {
     it('requires a reason', async () => {
       const { username, password } = await createPlatformUser({ role: 'PLATFORM_SUPER_ADMIN' });
       const token = await platformLogin(username, password);
-      const { organisationId } = await registerTestUser(app, { organisationName: 'Delete No Reason Org' });
+      const { organisationId } = await registerTestUser(app, {
+        organisationName: 'Delete No Reason Org',
+      });
 
       const res = await request(app)
         .delete(`/api/v1/backoffice/data-explorer/Organisation/records/${organisationId}`)
@@ -357,7 +400,9 @@ describe('backoffice data explorer', () => {
     it('allows deleting a row from a field-view-only/log-shaped model too — deletion is universal, only field-editing is restricted', async () => {
       const { username, password } = await createPlatformUser({ role: 'PLATFORM_SUPER_ADMIN' });
       const token = await platformLogin(username, password);
-      const { organisationId } = await registerTestUser(app, { organisationName: 'Delete Log Org' });
+      const { organisationId } = await registerTestUser(app, {
+        organisationName: 'Delete Log Org',
+      });
       const event = await testPrisma.activityEvent.create({
         data: { organisationId, eventType: 'PROPERTY_CREATED', title: 'test event' },
       });
@@ -390,7 +435,11 @@ describe('backoffice data explorer', () => {
       expect(gone).toBeNull();
 
       const audit = await testPrisma.platformAuditEvent.findFirst({
-        where: { action: 'dataExplorer.recordDeleted', entityType: 'Organisation', entityId: organisationId },
+        where: {
+          action: 'dataExplorer.recordDeleted',
+          entityType: 'Organisation',
+          entityId: organisationId,
+        },
       });
       expect(audit?.reason).toBe('cleaning up test data');
       expect((audit?.before as Record<string, unknown> | null)?.name).toBe('Delete Target Org');
@@ -410,12 +459,15 @@ describe('backoffice data explorer', () => {
     it('returns a clear conflict, not a 500, when other records still reference the row', async () => {
       const { username, password } = await createPlatformUser({ role: 'PLATFORM_SUPER_ADMIN' });
       const token = await platformLogin(username, password);
-      const { organisationId } = await registerTestUser(app, { organisationName: 'Delete FK Guard Org' });
+      const { organisationId } = await registerTestUser(app, {
+        organisationName: 'Delete FK Guard Org',
+      });
       // The organisation now has a Property (created via registerTestUser's
       // implicit staff org) — actually create one explicitly to be sure.
       await testPrisma.property.create({
         data: {
           organisationId,
+          publicReference: buildPublicReference('PROP'),
           name: 'Blocking Property',
           code: `BLOCK-${Date.now()}`,
           addressLine1: '1 St',

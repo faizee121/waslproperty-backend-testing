@@ -17,7 +17,10 @@ import {
   type AttentionSeverity,
 } from '../../lib/attention-engine.js';
 import type { AuthContext } from '../../middlewares/auth.middleware.js';
-import { AuthorizationService, type AccessibleProperties } from '../authorization/authorization.service.js';
+import {
+  AuthorizationService,
+  type AccessibleProperties,
+} from '../authorization/authorization.service.js';
 import { deriveWorkflowResult, type WorkflowResult } from '../quotes/workflow-result.js';
 import type { DashboardPeriod, DashboardQuery } from './dashboard.schemas.js';
 
@@ -128,7 +131,9 @@ function dayKey(date: Date): string {
 
 /** `undefined` when unrestricted (org staff), an `{in: [...]}` filter
  * fragment otherwise — spread into any `where` clause below. */
-function propertyScope(propertyIds: AccessibleProperties): { propertyId: { in: string[] } } | object {
+function propertyScope(
+  propertyIds: AccessibleProperties,
+): { propertyId: { in: string[] } } | object {
   return propertyIds === 'ALL' ? {} : { propertyId: { in: propertyIds } };
 }
 
@@ -185,7 +190,11 @@ export class DashboardService {
       this.getCategoryAndPriorityBreakdown(organisationId, propertyIds),
       this.getAverageResolutionHours(organisationId, propertyIds, periodStart, periodEnd),
       getAttentionItems(this.prisma, organisationId, now, scopedPropertyIds),
-      this.activityService.listForOrganisation(organisationId, { page: 1, pageSize: 10 }, scopedPropertyIds),
+      this.activityService.listForOrganisation(
+        organisationId,
+        { page: 1, pageSize: 10 },
+        scopedPropertyIds,
+      ),
     ]);
 
     return {
@@ -219,19 +228,47 @@ export class DashboardService {
       periodEnd: periodEnd.toISOString(),
       organisation,
       attention: { items: [], totalCount: 0, displayLimit: 8 },
-      metrics: { openRequests: 0, activeWorkOrders: 0, completedThisPeriod: 0, pendingSignature: 0 },
-      portfolio: { totalProperties: 0, totalSpaces: 0, occupiedSpaces: 0, vacantSpaces: 0, occupancyRatePct: 0 },
-      requestsSnapshot: { byStatus: Object.values(MaintenanceRequestStatus).map((status) => ({ status, count: 0 })) },
-      workOrdersSnapshot: { byStatus: Object.values(WorkOrderStatus).map((status) => ({ status, count: 0 })) },
+      metrics: {
+        openRequests: 0,
+        activeWorkOrders: 0,
+        completedThisPeriod: 0,
+        pendingSignature: 0,
+      },
+      portfolio: {
+        totalProperties: 0,
+        totalSpaces: 0,
+        occupiedSpaces: 0,
+        vacantSpaces: 0,
+        occupancyRatePct: 0,
+      },
+      requestsSnapshot: {
+        byStatus: Object.values(MaintenanceRequestStatus).map((status) => ({ status, count: 0 })),
+      },
+      workOrdersSnapshot: {
+        byStatus: Object.values(WorkOrderStatus).map((status) => ({ status, count: 0 })),
+      },
       quotesSnapshot: {
         byStatus: Object.values(ContractorQuoteStatus).map((status) => ({ status, count: 0 })),
-        byWorkflowResult: (['NOT_REQUIRED', 'PENDING', 'COMPLETED', 'REJECTED', 'FAILED', 'CANCELLED'] as WorkflowResult[]).map(
-          (result) => ({ result, count: 0 }),
-        ),
+        byWorkflowResult: (
+          [
+            'NOT_REQUIRED',
+            'PENDING',
+            'COMPLETED',
+            'REJECTED',
+            'FAILED',
+            'CANCELLED',
+          ] as WorkflowResult[]
+        ).map((result) => ({ result, count: 0 })),
       },
       trend: { points: [] },
-      categoryBreakdown: Object.values(MaintenanceCategory).map((category) => ({ category, count: 0 })),
-      priorityBreakdown: Object.values(MaintenancePriority).map((priority) => ({ priority, count: 0 })),
+      categoryBreakdown: Object.values(MaintenanceCategory).map((category) => ({
+        category,
+        count: 0,
+      })),
+      priorityBreakdown: Object.values(MaintenancePriority).map((priority) => ({
+        priority,
+        count: 0,
+      })),
       averageResolutionHours: null,
       recentActivity: [],
     };
@@ -280,7 +317,9 @@ export class DashboardService {
   private async getPortfolio(organisationId: string, propertyIds: AccessibleProperties) {
     const scope = propertyScope(propertyIds);
     const [totalProperties, spaceRows] = await Promise.all([
-      this.prisma.property.count({ where: { organisationId, ...(propertyIds === 'ALL' ? {} : { id: { in: propertyIds } }) } }),
+      this.prisma.property.count({
+        where: { organisationId, ...(propertyIds === 'ALL' ? {} : { id: { in: propertyIds } }) },
+      }),
       this.prisma.space.findMany({ where: { organisationId, ...scope }, select: { id: true } }),
     ]);
     const totalSpaces = spaceRows.length;
@@ -324,7 +363,8 @@ export class DashboardService {
   }
 
   private async getQuotesSnapshot(organisationId: string, propertyIds: AccessibleProperties) {
-    const workOrderScope = propertyIds === 'ALL' ? {} : { workOrder: { propertyId: { in: propertyIds } } };
+    const workOrderScope =
+      propertyIds === 'ALL' ? {} : { workOrder: { propertyId: { in: propertyIds } } };
     const [grouped, forWorkflowResult] = await Promise.all([
       this.prisma.contractorQuote.groupBy({
         by: ['status'],

@@ -15,7 +15,10 @@ const validProperty = {
   propertyType: 'MIXED_USE',
 };
 
-async function setupRequest(accessToken: string, overrides: Partial<{ category: string; propertyId: string }> = {}) {
+async function setupRequest(
+  accessToken: string,
+  overrides: Partial<{ category: string; propertyId: string }> = {},
+) {
   let propertyId = overrides.propertyId;
   if (!propertyId) {
     const propertyRes = await request(app)
@@ -27,7 +30,11 @@ async function setupRequest(accessToken: string, overrides: Partial<{ category: 
   const spaceRes = await request(app)
     .post(`/api/v1/properties/${propertyId}/spaces`)
     .set(authHeader(accessToken))
-    .send({ name: 'Unit 1', code: `U-${Date.now()}-${Math.random().toString(36).slice(2)}`, spaceType: 'APARTMENT' });
+    .send({
+      name: 'Unit 1',
+      code: `U-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      spaceType: 'APARTMENT',
+    });
   const requestRes = await request(app)
     .post('/api/v1/maintenance-requests')
     .set(authHeader(accessToken))
@@ -39,7 +46,11 @@ async function setupRequest(accessToken: string, overrides: Partial<{ category: 
       propertyId,
       spaceId: spaceRes.body.id,
     });
-  return { propertyId, spaceId: spaceRes.body.id as string, maintenanceRequestId: requestRes.body.id as string };
+  return {
+    propertyId,
+    spaceId: spaceRes.body.id as string,
+    maintenanceRequestId: requestRes.body.id as string,
+  };
 }
 
 async function createContractor(
@@ -98,7 +109,8 @@ async function createRound(
     .send({
       maintenanceRequestId,
       title: overrides.title ?? 'Fix the switchboard',
-      scopeDescription: overrides.scopeDescription ?? 'Diagnose and repair the tripping switchboard.',
+      scopeDescription:
+        overrides.scopeDescription ?? 'Diagnose and repair the tripping switchboard.',
       contractorIds,
     });
   expect(res.status).toBe(201);
@@ -197,6 +209,70 @@ describe('quote management, procurement & variations (M11)', () => {
       expect(roundRes.body.title).toBe('Original scope title');
       expect(roundRes.body.scopeDescription).toBe('Original scope description.');
     });
+
+    it('two concurrent requests to open a quote round for the same maintenance request never both succeed', async () => {
+      const { accessToken } = await registerTestUser(app);
+      const { maintenanceRequestId } = await setupRequest(accessToken);
+      const contractorId = await createContractor(accessToken);
+
+      const send = () =>
+        request(app)
+          .post('/api/v1/quote-rounds')
+          .set(authHeader(accessToken))
+          .send({
+            maintenanceRequestId,
+            title: 'Fix the switchboard',
+            scopeDescription: 'Diagnose and repair the tripping switchboard.',
+            contractorIds: [contractorId],
+          });
+
+      const [first, second] = await Promise.all([send(), send()]);
+      const statuses = [first.status, second.status].sort();
+      expect(statuses).toEqual([201, 409]);
+
+      const rounds = await testPrisma.quoteRound.findMany({
+        where: { maintenanceRequestId, status: { in: ['DRAFT', 'OPEN'] } },
+      });
+      expect(rounds).toHaveLength(1);
+    });
+
+    it('a concurrent quote round and a concurrent direct Work Order for the same maintenance request never both succeed', async () => {
+      const { accessToken } = await registerTestUser(app);
+      const { maintenanceRequestId } = await setupRequest(accessToken);
+      const contractorId = await createContractor(accessToken);
+
+      const sendRound = () =>
+        request(app)
+          .post('/api/v1/quote-rounds')
+          .set(authHeader(accessToken))
+          .send({
+            maintenanceRequestId,
+            title: 'Fix the switchboard',
+            scopeDescription: 'Diagnose and repair the tripping switchboard.',
+            contractorIds: [contractorId],
+          });
+      const sendDirectWork = () =>
+        request(app).post('/api/v1/work-orders').set(authHeader(accessToken)).send({
+          maintenanceRequestId,
+          title: 'Repair the switchboard directly',
+          description: 'Skip quoting — do it now.',
+          priority: 'HIGH',
+        });
+
+      const [roundRes, workOrderRes] = await Promise.all([sendRound(), sendDirectWork()]);
+      const statuses = [roundRes.status, workOrderRes.status].sort();
+      // Exactly one procurement path wins; the other sees a clean conflict,
+      // never a corrupted/duplicate state and never an opaque 500.
+      expect(statuses).toEqual([201, 409]);
+
+      const activeRounds = await testPrisma.quoteRound.count({
+        where: { maintenanceRequestId, status: { in: ['DRAFT', 'OPEN'] } },
+      });
+      const activeWorkOrders = await testPrisma.workOrder.count({
+        where: { maintenanceRequestId, status: { not: 'CANCELLED' } },
+      });
+      expect(activeRounds + activeWorkOrders).toBe(1);
+    });
   });
 
   describe('contractor response via secure token', () => {
@@ -224,11 +300,7 @@ describe('quote management, procurement & variations (M11)', () => {
   });
 
   describe('award', () => {
-    async function submitQuoteManually(
-      accessToken: string,
-      quoteId: string,
-      amount: number,
-    ) {
+    async function submitQuoteManually(accessToken: string, quoteId: string, amount: number) {
       const res = await request(app)
         .patch(`/api/v1/quotes/${quoteId}/submit`)
         .set(authHeader(accessToken))
@@ -257,10 +329,14 @@ describe('quote management, procurement & variations (M11)', () => {
       expect(awardRes.body.workOrder.contractorId).toBe(c1);
       expect(Number(awardRes.body.workOrder.estimatedCost)).toBe(5200);
 
-      const loserRes = await request(app).get(`/api/v1/quotes/${inv2.quoteId}`).set(authHeader(accessToken));
+      const loserRes = await request(app)
+        .get(`/api/v1/quotes/${inv2.quoteId}`)
+        .set(authHeader(accessToken));
       expect(loserRes.body.status).toBe('NOT_SELECTED');
 
-      const roundRes = await request(app).get(`/api/v1/quote-rounds/${round.id}`).set(authHeader(accessToken));
+      const roundRes = await request(app)
+        .get(`/api/v1/quote-rounds/${round.id}`)
+        .set(authHeader(accessToken));
       expect(roundRes.body.status).toBe('AWARDED');
       expect(roundRes.body.awardedQuoteId).toBe(inv1.quoteId);
     });
@@ -286,7 +362,9 @@ describe('quote management, procurement & variations (M11)', () => {
       expect(awardRes.status).toBe(403);
       expect(awardRes.body.error.details.blockingIssues[0].reason).toBe('MISSING');
 
-      const roundRes = await request(app).get(`/api/v1/quote-rounds/${round.id}`).set(authHeader(accessToken));
+      const roundRes = await request(app)
+        .get(`/api/v1/quote-rounds/${round.id}`)
+        .set(authHeader(accessToken));
       expect(roundRes.body.status).toBe('OPEN');
     });
 
@@ -331,6 +409,40 @@ describe('quote management, procurement & variations (M11)', () => {
         .set(authHeader(accessToken));
       expect(approveRes.status).toBe(200);
       expect(approveRes.body.status).toBe('APPROVED');
+    });
+
+    it('an RFQ-awarded quote with no approval policy configured cannot be bypassed via NONE either', async () => {
+      // Same quotes.manage-vs-quotes.approve invariant as the Direct Work
+      // path (see quotes.test.ts), exercised for the RFQ-awarded quote
+      // created by QuoteRoundsService.award rather than QuotesService.create.
+      const { accessToken } = await registerTestUser(app);
+      const { maintenanceRequestId } = await setupRequest(accessToken);
+      const contractorId = await createContractor(accessToken);
+      const round = await createRound(accessToken, maintenanceRequestId, [contractorId]);
+      const inv = round.invitations[0];
+      await submitQuoteManually(accessToken, inv.quoteId, 4000);
+      const awardRes = await request(app)
+        .post(`/api/v1/quote-rounds/${round.id}/award`)
+        .set(authHeader(accessToken))
+        .send({ quoteId: inv.quoteId });
+      expect(awardRes.status).toBe(200);
+
+      const quote = await request(app)
+        .get(`/api/v1/quotes/${inv.quoteId}`)
+        .set(authHeader(accessToken));
+      expect(quote.body.requiredWorkflowMode).toBeNull();
+
+      const setNone = await request(app)
+        .patch(`/api/v1/quotes/${inv.quoteId}/workflow-mode`)
+        .set(authHeader(accessToken))
+        .send({ workflowMode: 'NONE' });
+      expect(setNone.status).toBe(409);
+
+      const readyRes = await request(app)
+        .patch(`/api/v1/work-orders/${awardRes.body.workOrder.id}/status`)
+        .set(authHeader(accessToken))
+        .send({ status: 'READY' });
+      expect(readyRes.status).toBe(409);
     });
 
     it('cannot award a round twice — a concurrent second attempt is rejected', async () => {

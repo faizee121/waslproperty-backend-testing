@@ -90,7 +90,9 @@ export class PlatformAuthService {
     actor: { employeeId: string; platformRole: PlatformRole },
     input: PlatformChangePasswordInput,
   ): Promise<void> {
-    const employee = await this.prisma.employee.findUniqueOrThrow({ where: { id: actor.employeeId } });
+    const employee = await this.prisma.employee.findUniqueOrThrow({
+      where: { id: actor.employeeId },
+    });
     const valid = await verifyPassword(employee.passwordHash, input.currentPassword);
     if (!valid) throw new UnauthorizedError('Current password is incorrect');
 

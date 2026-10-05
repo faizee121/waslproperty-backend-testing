@@ -23,7 +23,9 @@ export class BackofficePlatformUsersService {
       name: `${e.firstName} ${e.lastName}`,
       role: e.role,
       isActive: e.isActive,
-      grantedBy: e.grantedByEmployee ? `${e.grantedByEmployee.firstName} ${e.grantedByEmployee.lastName}` : null,
+      grantedBy: e.grantedByEmployee
+        ? `${e.grantedByEmployee.firstName} ${e.grantedByEmployee.lastName}`
+        : null,
       createdAt: e.createdAt,
       updatedAt: e.updatedAt,
     }));
@@ -36,7 +38,9 @@ export class BackofficePlatformUsersService {
     input: GrantPlatformAccessInput,
     actor: { employeeId: string; platformRole: PlatformRole },
   ) {
-    const usernameTaken = await this.prisma.employee.findFirst({ where: { username: input.username } });
+    const usernameTaken = await this.prisma.employee.findFirst({
+      where: { username: input.username },
+    });
     if (usernameTaken) throw new ConflictError('That username is already taken');
 
     const temporaryPassword = generateTemporaryPassword();

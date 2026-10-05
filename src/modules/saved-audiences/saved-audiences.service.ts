@@ -7,7 +7,10 @@ import {
   AudienceResolver,
   type AudienceCriteria,
 } from '../communications/communications.audience.js';
-import type { CreateSavedAudienceInput, UpdateSavedAudienceInput } from './saved-audiences.schemas.js';
+import type {
+  CreateSavedAudienceInput,
+  UpdateSavedAudienceInput,
+} from './saved-audiences.schemas.js';
 
 export class SavedAudiencesService {
   private readonly audience: AudienceResolver;
@@ -65,7 +68,13 @@ export class SavedAudiencesService {
   ) {
     const criteria = input.criteria as AudienceCriteria;
     await this.audience.validate(organisationId, criteria);
-    await assertAudienceWithinScope(this.prisma, this.authz, auth, 'communications.manage', criteria);
+    await assertAudienceWithinScope(
+      this.prisma,
+      this.authz,
+      auth,
+      'communications.manage',
+      criteria,
+    );
 
     const existing = await this.prisma.savedAudience.findUnique({
       where: { organisationId_name: { organisationId, name: input.name } },
@@ -104,7 +113,13 @@ export class SavedAudiencesService {
     if (input.criteria) {
       const criteria = input.criteria as AudienceCriteria;
       await this.audience.validate(organisationId, criteria);
-      await assertAudienceWithinScope(this.prisma, this.authz, auth, 'communications.manage', criteria);
+      await assertAudienceWithinScope(
+        this.prisma,
+        this.authz,
+        auth,
+        'communications.manage',
+        criteria,
+      );
     }
 
     return this.prisma.savedAudience.update({

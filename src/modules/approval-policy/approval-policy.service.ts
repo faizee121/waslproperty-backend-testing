@@ -112,14 +112,17 @@ export class ApprovalPolicyService {
    * above band N-1's cap. This is what makes overlapping or gapped ranges
    * structurally impossible rather than merely validated.
    */
-  async upsertPolicy(organisationId: string, actorUserId: string, input: UpsertApprovalPolicyInput) {
+  async upsertPolicy(
+    organisationId: string,
+    actorUserId: string,
+    input: UpsertApprovalPolicyInput,
+  ) {
     const existing = await this.prisma.organisationApprovalPolicy.findUnique({
       where: { organisationId },
     });
 
     const ruleData = input.rules.map((rule, index) => {
-      const minCents =
-        index === 0 ? 0 : toCents(input.rules[index - 1]!.maxAmount as number) + 1;
+      const minCents = index === 0 ? 0 : toCents(input.rules[index - 1]!.maxAmount as number) + 1;
       return {
         organisationId,
         minAmount: (minCents / 100).toFixed(2),

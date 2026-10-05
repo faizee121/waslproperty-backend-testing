@@ -5,6 +5,10 @@ import {
   fromMaintenanceRequestParam,
   fromWorkOrderParam,
 } from '../../middlewares/resolvePropertyId.js';
+import {
+  resolveMaintenanceRequestReference,
+  resolveWorkOrderReference,
+} from '../../middlewares/resolvePublicReference.js';
 import { getPrismaClient } from '../../lib/prisma.js';
 import { asyncHandler } from '../../middlewares/asyncHandler.js';
 import {
@@ -44,31 +48,37 @@ workOrdersRouter.post(
 );
 workOrdersRouter.get(
   '/by-request/:maintenanceRequestId',
+  resolveMaintenanceRequestReference('maintenanceRequestId'),
   requireCapability('work_orders.view', fromMaintenanceRequestParam('maintenanceRequestId')),
   asyncHandler(getWorkOrderByMaintenanceRequest),
 );
 workOrdersRouter.get(
   '/:id',
+  resolveWorkOrderReference('id'),
   requireCapability('work_orders.view', fromWorkOrderParam('id')),
   asyncHandler(getWorkOrder),
 );
 workOrdersRouter.patch(
   '/:id/status',
+  resolveWorkOrderReference('id'),
   requireCapability('work_orders.manage', fromWorkOrderParam('id')),
   asyncHandler(updateWorkOrderStatus),
 );
 workOrdersRouter.get(
   '/:id/contractor-eligibility',
+  resolveWorkOrderReference('id'),
   requireCapability('work_orders.manage', fromWorkOrderParam('id')),
   asyncHandler(getWorkOrderContractorEligibility),
 );
 workOrdersRouter.patch(
   '/:id/contractor',
+  resolveWorkOrderReference('id'),
   requireCapability('work_orders.manage', fromWorkOrderParam('id')),
   asyncHandler(assignWorkOrderContractor),
 );
 workOrdersRouter.patch(
   '/:id/cost',
+  resolveWorkOrderReference('id'),
   requireCapability('work_orders.manage', fromWorkOrderParam('id')),
   asyncHandler(updateWorkOrderCost),
 );

@@ -7,9 +7,11 @@ function escapeHtml(value: string): string {
 }
 
 function formatDate(date: Date): string {
-  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(
-    date,
-  );
+  return new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(date);
 }
 
 export interface RfqInvitationEmailInput {
@@ -34,7 +36,9 @@ export function renderRfqInvitationEmail(input: RfqInvitationEmailInput): {
 } {
   const subject = `Request for quote: ${input.title} — ${input.organisationName}`;
   const dueLine = input.dueAt ? `Quotes are due by ${formatDate(input.dueAt)}.` : '';
-  const location = input.spaceName ? `${input.propertyName} — ${input.spaceName}` : input.propertyName;
+  const location = input.spaceName
+    ? `${input.propertyName} — ${input.spaceName}`
+    : input.propertyName;
 
   const html = `
     <div style="font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 480px; margin: 0 auto;">

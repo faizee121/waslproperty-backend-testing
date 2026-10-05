@@ -206,7 +206,9 @@ export async function assertAudienceWithinScope(
   if (accessible === 'ALL') return;
 
   if (criteria.scope === 'ORGANISATION') {
-    throw new ForbiddenError('An organisation-wide announcement requires organisation staff access');
+    throw new ForbiddenError(
+      'An organisation-wide announcement requires organisation staff access',
+    );
   }
   if (criteria.scope === 'PROPERTY') {
     const outOfScope = (criteria.propertyIds ?? []).some((id) => !accessible.includes(id));
@@ -216,11 +218,22 @@ export async function assertAudienceWithinScope(
   }
   if (criteria.scope === 'SPACE') {
     const spaceIds = criteria.spaceIds ?? [];
+    // Tenant-scoped even though the downstream `accessible.includes(...)`
+    // check below can never actually pass for a foreign-org space (its
+    // propertyId can never appear in THIS org's `accessible` list) — the
+    // authorization helper itself should never read across an
+    // organisation boundary in the first place, regardless of what a
+    // caller downstream happens to do with the result.
     const spaces = await prisma.space.findMany({
-      where: { id: { in: spaceIds } },
+      where: { id: { in: spaceIds }, organisationId: auth.organisationId },
       select: { propertyId: true },
     });
-    const outOfScope = spaces.some((s) => !accessible.includes(s.propertyId));
+    // A spaceId that doesn't resolve within this org at all (foreign org,
+    // or simply doesn't exist) must be rejected exactly like one that
+    // does but falls outside `accessible` — never silently ignored just
+    // because the now-tenant-scoped query above didn't find it.
+    const outOfScope =
+      spaces.length !== spaceIds.length || spaces.some((s) => !accessible.includes(s.propertyId));
     if (outOfScope) {
       throw new ForbiddenError('You do not have access to one or more selected spaces');
     }

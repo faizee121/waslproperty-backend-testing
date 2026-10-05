@@ -92,7 +92,9 @@ describe('backoffice SQL console', () => {
     });
 
     it('rejects an unauthenticated request', async () => {
-      const res = await request(app).post('/api/v1/backoffice/sql-console/execute').send({ sql: 'SELECT 1' });
+      const res = await request(app)
+        .post('/api/v1/backoffice/sql-console/execute')
+        .send({ sql: 'SELECT 1' });
       expect(res.status).toBe(401);
     });
   });
@@ -303,7 +305,11 @@ describe('backoffice SQL console', () => {
       const res = await request(app)
         .post('/api/v1/backoffice/sql-console/execute')
         .set(authHeader(token))
-        .send({ sql: "UPDATE organisations SET name = 'x' WHERE id = 'nope'", reason: 'test', confirmationPhrase: 'PRODUCTION' });
+        .send({
+          sql: "UPDATE organisations SET name = 'x' WHERE id = 'nope'",
+          reason: 'test',
+          confirmationPhrase: 'PRODUCTION',
+        });
       expect(res.status).toBe(403);
     });
 
@@ -355,7 +361,9 @@ describe('backoffice SQL console', () => {
         .send({ sql: "UPDATE organisations SET name = 'x' WHERE id = 'nope'", reason: 'test' });
       expect(noConfirmRes.status).toBe(422);
 
-      const count = await testPrisma.platformAuditEvent.count({ where: { action: 'sqlConsole.executed' } });
+      const count = await testPrisma.platformAuditEvent.count({
+        where: { action: 'sqlConsole.executed' },
+      });
       expect(count).toBe(0);
     });
 

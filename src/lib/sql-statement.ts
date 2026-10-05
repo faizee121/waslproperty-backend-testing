@@ -22,7 +22,16 @@ export type SqlStatementKind =
   | 'OTHER';
 
 const KNOWN_KEYWORDS = new Set<string>([
-  'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'DROP', 'TRUNCATE', 'WITH', 'EXPLAIN',
+  'SELECT',
+  'INSERT',
+  'UPDATE',
+  'DELETE',
+  'CREATE',
+  'ALTER',
+  'DROP',
+  'TRUNCATE',
+  'WITH',
+  'EXPLAIN',
 ]);
 
 export interface SqlStatementClassification {
@@ -41,9 +50,7 @@ export interface SqlStatementClassification {
 }
 
 export function stripSqlComments(sql: string): string {
-  return sql
-    .replace(/--[^\n]*/g, ' ')
-    .replace(/\/\*[\s\S]*?\*\//g, ' ');
+  return sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
 }
 
 function firstKeyword(strippedSql: string): string {

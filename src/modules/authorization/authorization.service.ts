@@ -82,7 +82,8 @@ export class AuthorizationService {
     const rolesUsed = [...new Set(memberships.map((m) => m.role))];
     const roleCapabilityEntries = await Promise.all(
       rolesUsed.map(
-        async (role) => [role, await this.getEffectiveRoleCapabilities(organisationId, role)] as const,
+        async (role) =>
+          [role, await this.getEffectiveRoleCapabilities(organisationId, role)] as const,
       ),
     );
     const roleCapabilities = new Map(roleCapabilityEntries);

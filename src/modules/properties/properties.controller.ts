@@ -28,7 +28,11 @@ export async function createProperty(req: Request, res: Response) {
 
 export async function getProperty(req: Request, res: Response) {
   const auth = requireAuth(req);
-  const property = await propertiesService.getById(auth.organisationId, auth, req.params.id as string);
+  const property = await propertiesService.getById(
+    auth.organisationId,
+    auth,
+    req.params.id as string,
+  );
   res.json(property);
 }
 

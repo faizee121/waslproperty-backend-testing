@@ -22,7 +22,7 @@ vi.mock('../../src/lib/waslSign.js', async (importOriginal) => {
 
 import { createApp } from '../../src/app.js';
 import { resetDb, testPrisma } from '../helpers/db.js';
-import { authHeader, registerTestUser } from '../helpers/auth.js';
+import { authHeader, registerTestUser, residentAccessToken } from '../helpers/auth.js';
 
 const app = createApp();
 
@@ -75,7 +75,23 @@ async function setupWorkOrderWithContractor(accessToken: string, amount: number)
     description: 'HVAC repair',
   });
 
-  return { workOrderId: workOrderRes.body.id as string, quoteId: quoteRes.body.id as string };
+  return {
+    workOrderId: workOrderRes.body.id as string,
+    quoteId: quoteRes.body.id as string,
+    propertyId: propertyRes.body.id as string,
+  };
+}
+
+async function addPropertyPerson(accessToken: string, propertyId: string, role: string) {
+  const email = `person+${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`;
+  const res = await request(app)
+    .post(`/api/v1/properties/${propertyId}/memberships`)
+    .set(authHeader(accessToken))
+    .send({ email, firstName: 'Test', lastName: 'Person', role });
+  return {
+    userId: res.body.contact.userId as string,
+    contactId: res.body.contactId as string,
+  };
 }
 
 describe('contractor quotes + workflow modes', () => {
@@ -113,7 +129,7 @@ describe('contractor quotes + workflow modes', () => {
       return res.body;
     }
 
-    it('with no policy configured, a quote gets no suggested workflow and release stays blocked until a manager explicitly chooses one', async () => {
+    it('with no policy configured, a quote gets no suggested workflow, NONE cannot be selected, and release stays blocked until an explicit workflow is confirmed and approved', async () => {
       const { accessToken } = await registerTestUser(app);
       const { workOrderId, quoteId } = await setupWorkOrderWithContractor(accessToken, 500);
 
@@ -131,11 +147,180 @@ describe('contractor quotes + workflow modes', () => {
         .send({ status: 'READY' });
       expect(toReady.status).toBe(409);
 
-      const setMode = await request(app)
+      // Nor can "no approval needed" be selected directly — an unconfigured
+      // policy must never be indistinguishable from "no approval required".
+      // Regression for the quotes.manage-without-quotes.approve bypass.
+      const setNone = await request(app)
         .patch(`/api/v1/quotes/${quoteId}/workflow-mode`)
         .set(authHeader(accessToken))
         .send({ workflowMode: 'NONE' });
+      expect(setNone.status).toBe(409);
+      const stillUnresolved = await request(app)
+        .get(`/api/v1/quotes/${quoteId}`)
+        .set(authHeader(accessToken));
+      expect(stillUnresolved.body.workflowMode).toBeNull();
+      expect(stillUnresolved.body.status).not.toBe('APPROVED');
+
+      // An explicit workflow still works exactly as before, and approving
+      // it (quotes.approve) is still what unblocks release.
+      const setMode = await request(app)
+        .patch(`/api/v1/quotes/${quoteId}/workflow-mode`)
+        .set(authHeader(accessToken))
+        .send({ workflowMode: 'APPROVAL_ONLY' });
       expect(setMode.status).toBe(200);
+
+      const approve = await request(app)
+        .post(`/api/v1/quotes/${quoteId}/approve`)
+        .set(authHeader(accessToken));
+      expect(approve.status).toBe(200);
+      expect(approve.body.status).toBe('APPROVED');
+    });
+
+    it('a currency mismatch between the policy and the quote leaves no floor — NONE cannot be selected without an explicit workflow', async () => {
+      const { accessToken } = await registerTestUser(app);
+      await configurePolicy(accessToken); // policy currency is AUD
+
+      const propertyRes = await request(app)
+        .post('/api/v1/properties')
+        .set(authHeader(accessToken))
+        .send(validProperty);
+      const spaceRes = await request(app)
+        .post(`/api/v1/properties/${propertyRes.body.id}/spaces`)
+        .set(authHeader(accessToken))
+        .send(validSpace);
+      const requestRes = await request(app)
+        .post('/api/v1/maintenance-requests')
+        .set(authHeader(accessToken))
+        .send({
+          ...validRequestPayload,
+          propertyId: propertyRes.body.id,
+          spaceId: spaceRes.body.id,
+        });
+      const workOrderRes = await request(app)
+        .post('/api/v1/work-orders')
+        .set(authHeader(accessToken))
+        .send({
+          maintenanceRequestId: requestRes.body.id,
+          title: 'Repair leaking AC unit',
+          description: 'Replace the drain pan and re-seal the unit.',
+          priority: 'HIGH',
+        });
+      const contractorRes = await request(app)
+        .post('/api/v1/contractors')
+        .set(authHeader(accessToken))
+        .send({ name: 'Acme HVAC', email: 'ops2@acmehvac.com', tradeTypes: ['HVAC'] });
+      const quoteRes = await request(app).post('/api/v1/quotes').set(authHeader(accessToken)).send({
+        workOrderId: workOrderRes.body.id,
+        contractorId: contractorRes.body.id,
+        amount: 500, // would resolve to the policy's NONE band if the currency matched
+        currencyCode: 'USD', // policy is configured in AUD — mismatch
+        description: 'HVAC repair',
+      });
+      expect(quoteRes.body.requiredWorkflowMode).toBeNull();
+      expect(quoteRes.body.approvalPolicySnapshot.currencyMismatch).toBe(true);
+
+      const setNone = await request(app)
+        .patch(`/api/v1/quotes/${quoteRes.body.id}/workflow-mode`)
+        .set(authHeader(accessToken))
+        .send({ workflowMode: 'NONE' });
+      expect(setNone.status).toBe(409);
+
+      const ready = await request(app)
+        .patch(`/api/v1/work-orders/${workOrderRes.body.id}/status`)
+        .set(authHeader(accessToken))
+        .send({ status: 'READY' });
+      expect(ready.status).toBe(409);
+    });
+
+    it('a quotes.manage-only property manager cannot grant approval authority to themselves via NONE', async () => {
+      const owner = await registerTestUser(app);
+      const { workOrderId, quoteId, propertyId } = await setupWorkOrderWithContractor(
+        owner.accessToken,
+        500,
+      );
+      // No policy configured — same null-floor scenario, but this time
+      // exercised by a real quotes.manage-holding, quotes.approve-lacking
+      // actor rather than the org OWNER (who always holds both).
+      const person = await addPropertyPerson(owner.accessToken, propertyId, 'PROPERTY_MANAGER');
+      await request(app)
+        .put('/api/v1/organisations/me/role-permissions/PROPERTY_MANAGER')
+        .set(authHeader(owner.accessToken))
+        .send({ overrides: [{ capability: 'quotes.approve', granted: false }] });
+      const managerToken = residentAccessToken(
+        person.userId,
+        owner.organisationId,
+        person.contactId,
+      );
+
+      const managerCapabilities = await request(app)
+        .get('/api/v1/organisations/me')
+        .set(authHeader(managerToken));
+      expect(managerCapabilities.body.capabilities).toContain('quotes.manage');
+      expect(managerCapabilities.body.capabilities).not.toContain('quotes.approve');
+
+      const setNone = await request(app)
+        .patch(`/api/v1/quotes/${quoteId}/workflow-mode`)
+        .set(authHeader(managerToken))
+        .send({ workflowMode: 'NONE' });
+      expect(setNone.status).toBe(409);
+
+      // Also confirm the reverse boundary still holds: even once an
+      // explicit workflow is chosen, this actor cannot approve it either.
+      await request(app)
+        .patch(`/api/v1/quotes/${quoteId}/workflow-mode`)
+        .set(authHeader(managerToken))
+        .send({ workflowMode: 'APPROVAL_ONLY' });
+      const approveAttempt = await request(app)
+        .post(`/api/v1/quotes/${quoteId}/approve`)
+        .set(authHeader(managerToken));
+      expect(approveAttempt.status).toBe(403);
+
+      const workOrder = await request(app)
+        .patch(`/api/v1/work-orders/${workOrderId}/status`)
+        .set(authHeader(owner.accessToken))
+        .send({ status: 'READY' });
+      expect(workOrder.status).toBe(409);
+    });
+
+    it('an actor holding only quotes.approve (not quotes.manage) can still finalise a quote the policy itself already resolved to NONE', async () => {
+      const owner = await registerTestUser(app);
+      await configurePolicy(owner.accessToken);
+      const { workOrderId, quoteId, propertyId } = await setupWorkOrderWithContractor(
+        owner.accessToken,
+        500,
+      );
+      const preApprove = await request(app)
+        .get(`/api/v1/quotes/${quoteId}`)
+        .set(authHeader(owner.accessToken));
+      // The policy itself already established NONE for this amount —
+      // nobody chose it, so there is no escalation in finalising it.
+      expect(preApprove.body.workflowMode).toBe('NONE');
+      expect(preApprove.body.status).not.toBe('APPROVED');
+
+      // COMMITTEE_MEMBER holds quotes.approve but NOT quotes.manage by
+      // default — the mirror image of the test above.
+      const person = await addPropertyPerson(owner.accessToken, propertyId, 'COMMITTEE_MEMBER');
+      const committeeToken = residentAccessToken(
+        person.userId,
+        owner.organisationId,
+        person.contactId,
+      );
+      const committeeCapabilities = await request(app)
+        .get('/api/v1/organisations/me')
+        .set(authHeader(committeeToken));
+      expect(committeeCapabilities.body.capabilities).toContain('quotes.approve');
+      expect(committeeCapabilities.body.capabilities).not.toContain('quotes.manage');
+
+      const approveRes = await request(app)
+        .post(`/api/v1/quotes/${quoteId}/approve`)
+        .set(authHeader(committeeToken));
+      expect(approveRes.status).toBe(200);
+      expect(approveRes.body.status).toBe('APPROVED');
+
+      const workOrder = await request(app)
+        .get(`/api/v1/work-orders/${workOrderId}`)
+        .set(authHeader(owner.accessToken));
+      expect(workOrder.body.status).toBe('READY');
     });
 
     it('resolves a low-value quote to the policy-configured NONE band and lets it be released without any workflow', async () => {
@@ -622,7 +807,9 @@ describe('contractor quotes + workflow modes', () => {
       const { accessToken } = await registerTestUser(app);
       const { workOrderId, quoteId } = await setupWorkOrderWithContractor(accessToken, 1000);
 
-      const workOrder = await testPrisma.workOrder.findUniqueOrThrow({ where: { id: workOrderId } });
+      const workOrder = await testPrisma.workOrder.findUniqueOrThrow({
+        where: { id: workOrderId },
+      });
       const quote = await testPrisma.contractorQuote.findUniqueOrThrow({ where: { id: quoteId } });
       expect(workOrder.currencyCode).toBe('AUD');
       expect(quote.currencyCode).toBe('AUD');
@@ -630,10 +817,15 @@ describe('contractor quotes + workflow modes', () => {
 
     it('inherits a non-default organisation currency', async () => {
       const { accessToken, organisationId } = await registerTestUser(app);
-      await testPrisma.organisation.update({ where: { id: organisationId }, data: { currencyCode: 'GBP' } });
+      await testPrisma.organisation.update({
+        where: { id: organisationId },
+        data: { currencyCode: 'GBP' },
+      });
 
       const { workOrderId, quoteId } = await setupWorkOrderWithContractor(accessToken, 1000);
-      const workOrder = await testPrisma.workOrder.findUniqueOrThrow({ where: { id: workOrderId } });
+      const workOrder = await testPrisma.workOrder.findUniqueOrThrow({
+        where: { id: workOrderId },
+      });
       const quote = await testPrisma.contractorQuote.findUniqueOrThrow({ where: { id: quoteId } });
       expect(workOrder.currencyCode).toBe('GBP');
       expect(quote.currencyCode).toBe('GBP');
@@ -652,22 +844,28 @@ describe('contractor quotes + workflow modes', () => {
       const workOrderRes = await request(app)
         .post('/api/v1/work-orders')
         .set(authHeader(accessToken))
-        .send({ maintenanceRequestId: requestRes.body.id, title: 'Repair', description: 'test', priority: 'LOW' });
+        .send({
+          maintenanceRequestId: requestRes.body.id,
+          title: 'Repair',
+          description: 'test',
+          priority: 'LOW',
+        });
       const contractorRes = await request(app)
         .post('/api/v1/contractors')
         .set(authHeader(accessToken))
-        .send({ name: 'Overseas Contractor', email: `overseas+${Date.now()}@example.com`, tradeTypes: ['HVAC'] });
-
-      const quoteRes = await request(app)
-        .post('/api/v1/quotes')
-        .set(authHeader(accessToken))
         .send({
-          workOrderId: workOrderRes.body.id,
-          contractorId: contractorRes.body.id,
-          amount: 500,
-          currencyCode: 'usd',
-          description: 'test',
+          name: 'Overseas Contractor',
+          email: `overseas+${Date.now()}@example.com`,
+          tradeTypes: ['HVAC'],
         });
+
+      const quoteRes = await request(app).post('/api/v1/quotes').set(authHeader(accessToken)).send({
+        workOrderId: workOrderRes.body.id,
+        contractorId: contractorRes.body.id,
+        amount: 500,
+        currencyCode: 'usd',
+        description: 'test',
+      });
       expect(quoteRes.status).toBe(201);
       expect(quoteRes.body.currencyCode).toBe('USD');
     });
@@ -685,22 +883,28 @@ describe('contractor quotes + workflow modes', () => {
       const workOrderRes = await request(app)
         .post('/api/v1/work-orders')
         .set(authHeader(accessToken))
-        .send({ maintenanceRequestId: requestRes.body.id, title: 'Repair', description: 'test', priority: 'LOW' });
+        .send({
+          maintenanceRequestId: requestRes.body.id,
+          title: 'Repair',
+          description: 'test',
+          priority: 'LOW',
+        });
       const contractorRes = await request(app)
         .post('/api/v1/contractors')
         .set(authHeader(accessToken))
-        .send({ name: 'Bad Currency Co', email: `badcurrency+${Date.now()}@example.com`, tradeTypes: ['HVAC'] });
-
-      const res = await request(app)
-        .post('/api/v1/quotes')
-        .set(authHeader(accessToken))
         .send({
-          workOrderId: workOrderRes.body.id,
-          contractorId: contractorRes.body.id,
-          amount: 500,
-          currencyCode: 'NOTREAL',
-          description: 'test',
+          name: 'Bad Currency Co',
+          email: `badcurrency+${Date.now()}@example.com`,
+          tradeTypes: ['HVAC'],
         });
+
+      const res = await request(app).post('/api/v1/quotes').set(authHeader(accessToken)).send({
+        workOrderId: workOrderRes.body.id,
+        contractorId: contractorRes.body.id,
+        amount: 500,
+        currencyCode: 'NOTREAL',
+        description: 'test',
+      });
       expect(res.status).toBe(422);
     });
 
@@ -713,7 +917,9 @@ describe('contractor quotes + workflow modes', () => {
         .set(authHeader(accessToken))
         .send({ currencyCode: 'EUR' });
 
-      const workOrder = await testPrisma.workOrder.findUniqueOrThrow({ where: { id: workOrderId } });
+      const workOrder = await testPrisma.workOrder.findUniqueOrThrow({
+        where: { id: workOrderId },
+      });
       const quote = await testPrisma.contractorQuote.findUniqueOrThrow({ where: { id: quoteId } });
       expect(workOrder.currencyCode).toBe('AUD');
       expect(quote.currencyCode).toBe('AUD');
@@ -722,7 +928,11 @@ describe('contractor quotes + workflow modes', () => {
       const contractorRes = await request(app)
         .post('/api/v1/contractors')
         .set(authHeader(accessToken))
-        .send({ name: 'Post-Change Co', email: `postchange+${Date.now()}@example.com`, tradeTypes: ['HVAC'] });
+        .send({
+          name: 'Post-Change Co',
+          email: `postchange+${Date.now()}@example.com`,
+          tradeTypes: ['HVAC'],
+        });
       const newQuoteRes = await request(app)
         .post('/api/v1/quotes')
         .set(authHeader(accessToken))

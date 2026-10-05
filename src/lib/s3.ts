@@ -31,3 +31,21 @@ export async function presignGet(key: string, expiresInSeconds = 300): Promise<s
   const command = new GetObjectCommand({ Bucket: env.S3_BUCKET_NAME, Key: key });
   return getSignedUrl(getClient(), command, { expiresIn: expiresInSeconds });
 }
+
+/** Downloads an object's bytes directly into the backend process — unlike
+ * presignPut/presignGet (which exist specifically so the backend never
+ * proxies file bytes for the frontend), the M15 document-analysis
+ * pipeline genuinely needs the real bytes server-side to render/OCR them.
+ * Used nowhere else — every other upload/download in this codebase stays
+ * on the presigned-URL pattern above. */
+export async function getObjectBytes(key: string): Promise<Buffer> {
+  const command = new GetObjectCommand({ Bucket: env.S3_BUCKET_NAME, Key: key });
+  const response = await getClient().send(command);
+  const body = response.Body;
+  if (!body) throw new Error(`S3 object ${key} has no body`);
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of body as AsyncIterable<Uint8Array>) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}

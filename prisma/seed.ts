@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { hashPassword } from '../src/lib/password.js';
+import { buildPublicReference } from '../src/lib/public-reference.js';
 
 const prisma = new PrismaClient();
 
@@ -17,11 +18,43 @@ async function resetDemoOrg() {
   });
   const propertyIds = properties.map((p) => p.id);
 
+  // Break WorkOrder<->ContractorQuote's circular FK pair before either side
+  // can be deleted — same pattern as test/helpers/db.ts's resetDb().
+  await prisma.workOrder.updateMany({
+    where: { organisationId: existing.id },
+    data: { selectedQuoteId: null },
+  });
+  await prisma.quoteRound.updateMany({
+    where: { organisationId: existing.id },
+    data: { awardedQuoteId: null },
+  });
+
   await prisma.$transaction([
+    prisma.activityEvent.deleteMany({ where: { organisationId: existing.id } }),
+    prisma.notification.deleteMany({ where: { organisationId: existing.id } }),
+    prisma.communicationRecipient.deleteMany({
+      where: { communication: { organisationId: existing.id } },
+    }),
+    prisma.communication.deleteMany({ where: { organisationId: existing.id } }),
+    prisma.workOrderVariation.deleteMany({ where: { organisationId: existing.id } }),
+    prisma.contractorQuote.deleteMany({ where: { organisationId: existing.id } }),
+    prisma.quoteRoundInvitation.deleteMany({ where: { organisationId: existing.id } }),
+    prisma.quoteRound.deleteMany({ where: { organisationId: existing.id } }),
+    prisma.workOrder.deleteMany({ where: { organisationId: existing.id } }),
+    prisma.maintenanceRequestAttachment.deleteMany({
+      where: { maintenanceRequest: { organisationId: existing.id } },
+    }),
+    prisma.maintenanceRequest.deleteMany({ where: { organisationId: existing.id } }),
+    prisma.contractorCredential.deleteMany({
+      where: { contractor: { organisationId: existing.id } },
+    }),
+    prisma.contractorComplianceRequirement.deleteMany({ where: { organisationId: existing.id } }),
+    prisma.contractor.deleteMany({ where: { organisationId: existing.id } }),
     prisma.propertyMembership.deleteMany({ where: { organisationId: existing.id } }),
     prisma.propertyContact.deleteMany({ where: { organisationId: existing.id } }),
     prisma.space.deleteMany({ where: { propertyId: { in: propertyIds } } }),
     prisma.property.deleteMany({ where: { organisationId: existing.id } }),
+    prisma.session.deleteMany({ where: { organisationId: existing.id } }),
     prisma.organisationMembership.deleteMany({ where: { organisationId: existing.id } }),
     prisma.organisation.delete({ where: { id: existing.id } }),
   ]);
@@ -58,6 +91,7 @@ async function main() {
   const marinaHeights = await prisma.property.create({
     data: {
       organisationId: organisation.id,
+      publicReference: buildPublicReference('PROP'),
       name: 'Marina Heights',
       code: 'MARINA-HT',
       addressLine1: '1 Marina Blvd',
@@ -73,6 +107,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: marinaHeights.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Apartment 1204',
         code: '1204',
         spaceType: 'APARTMENT',
@@ -84,6 +119,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: marinaHeights.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Apartment 1205',
         code: '1205',
         spaceType: 'APARTMENT',
@@ -95,6 +131,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: marinaHeights.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Apartment 2001',
         code: '2001',
         spaceType: 'APARTMENT',
@@ -108,6 +145,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: marinaHeights.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Parking Space P-12',
         code: 'P-12',
         spaceType: 'PARKING',
@@ -117,6 +155,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: marinaHeights.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Storage Unit 3',
         code: 'ST-3',
         spaceType: 'STORAGE',
@@ -126,6 +165,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: marinaHeights.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Lobby',
         code: 'CA-1',
         spaceType: 'COMMON_AREA',
@@ -137,6 +177,7 @@ async function main() {
   const palmResidences = await prisma.property.create({
     data: {
       organisationId: organisation.id,
+      publicReference: buildPublicReference('PROP'),
       name: 'Palm Residences',
       code: 'PALM-RES',
       addressLine1: 'Frond K, Palm Jumeirah',
@@ -152,6 +193,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: palmResidences.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Villa 1',
         code: 'V-01',
         spaceType: 'VILLA',
@@ -162,6 +204,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: palmResidences.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Villa 2',
         code: 'V-02',
         spaceType: 'VILLA',
@@ -172,6 +215,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: palmResidences.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Villa 3',
         code: 'V-03',
         spaceType: 'VILLA',
@@ -182,6 +226,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: palmResidences.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Villa 4',
         code: 'V-04',
         spaceType: 'VILLA',
@@ -193,6 +238,7 @@ async function main() {
     data: {
       organisationId: organisation.id,
       propertyId: palmResidences.id,
+      publicReference: buildPublicReference('LOT'),
       name: 'Clubhouse',
       code: 'CA-1',
       spaceType: 'COMMON_AREA',
@@ -203,6 +249,7 @@ async function main() {
   const downtownTower = await prisma.property.create({
     data: {
       organisationId: organisation.id,
+      publicReference: buildPublicReference('PROP'),
       name: 'Downtown Business Tower',
       code: 'DT-TOWER',
       addressLine1: '5 Sheikh Mohammed Bin Rashid Blvd',
@@ -218,6 +265,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: downtownTower.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Office 501',
         code: '501',
         spaceType: 'OFFICE',
@@ -229,6 +277,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: downtownTower.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Office 502',
         code: '502',
         spaceType: 'OFFICE',
@@ -240,6 +289,7 @@ async function main() {
       data: {
         organisationId: organisation.id,
         propertyId: downtownTower.id,
+        publicReference: buildPublicReference('LOT'),
         name: 'Retail Unit G01',
         code: 'G-01',
         spaceType: 'RETAIL',
@@ -253,6 +303,7 @@ async function main() {
   await prisma.property.create({
     data: {
       organisationId: organisation.id,
+      publicReference: buildPublicReference('PROP'),
       name: 'Al Barsha Community Center',
       code: 'AL-BARSHA-CC',
       addressLine1: '12 Al Barsha South Street',

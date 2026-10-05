@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { recordActivity } from '../activity/activity.js';
 import { ConflictError, NotFoundError } from '../../errors/AppError.js';
+import { withPublicReference } from '../../lib/public-reference.js';
 import type { AuthContext } from '../../middlewares/auth.middleware.js';
 import type { PaginatedResult } from '../../lib/pagination.js';
 import { AuthorizationService } from '../authorization/authorization.service.js';
@@ -75,19 +76,22 @@ export class CommunicationsService {
     await this.assertAudienceWithinScope(auth, 'communications.manage', criteria);
 
     return this.prisma.$transaction(async (tx) => {
-      const communication = await tx.communication.create({
-        data: {
-          organisationId,
-          title: input.title,
-          body: input.body,
-          channels: input.channels,
-          audienceCriteria: criteria as unknown as Prisma.InputJsonValue,
-          savedAudienceId: input.savedAudienceId ?? null,
-          createdByUserId: actorUserId,
-          status: 'DRAFT',
-        },
-        include: communicationInclude,
-      });
+      const communication = await withPublicReference('COM', (publicReference) =>
+        tx.communication.create({
+          data: {
+            organisationId,
+            publicReference,
+            title: input.title,
+            body: input.body,
+            channels: input.channels,
+            audienceCriteria: criteria as unknown as Prisma.InputJsonValue,
+            savedAudienceId: input.savedAudienceId ?? null,
+            createdByUserId: actorUserId,
+            status: 'DRAFT',
+          },
+          include: communicationInclude,
+        }),
+      );
 
       await recordActivity(tx, {
         organisationId,
@@ -135,7 +139,9 @@ export class CommunicationsService {
         ...(input.title !== undefined ? { title: input.title } : {}),
         ...(input.body !== undefined ? { body: input.body } : {}),
         ...(input.channels !== undefined ? { channels: input.channels } : {}),
-        ...(criteria !== undefined ? { audienceCriteria: criteria as unknown as Prisma.InputJsonValue } : {}),
+        ...(criteria !== undefined
+          ? { audienceCriteria: criteria as unknown as Prisma.InputJsonValue }
+          : {}),
         ...(input.savedAudienceId !== undefined ? { savedAudienceId: input.savedAudienceId } : {}),
       },
       include: communicationInclude,
@@ -146,7 +152,9 @@ export class CommunicationsService {
     organisationId: string,
     auth: AuthContext,
     query: CommunicationsQuery,
-  ): Promise<PaginatedResult<Prisma.CommunicationGetPayload<{ include: typeof communicationInclude }>>> {
+  ): Promise<
+    PaginatedResult<Prisma.CommunicationGetPayload<{ include: typeof communicationInclude }>>
+  > {
     const accessible = await this.authz.getAccessiblePropertyIds(auth, 'communications.view');
     if (accessible !== 'ALL' && accessible.length === 0) {
       return { items: [], page: query.page, pageSize: query.pageSize, total: 0 };
@@ -267,26 +275,34 @@ export class CommunicationsService {
     });
   }
 
-  async duplicateAsDraft(organisationId: string, auth: AuthContext, actorUserId: string, id: string) {
+  async duplicateAsDraft(
+    organisationId: string,
+    auth: AuthContext,
+    actorUserId: string,
+    id: string,
+  ) {
     const existing = await this.getOwned(organisationId, id);
     await this.assertAudienceWithinScope(
       auth,
       'communications.manage',
       existing.audienceCriteria as unknown as AudienceCriteria,
     );
-    return this.prisma.communication.create({
-      data: {
-        organisationId,
-        title: existing.title,
-        body: existing.body,
-        channels: existing.channels,
-        audienceCriteria: existing.audienceCriteria as Prisma.InputJsonValue,
-        savedAudienceId: existing.savedAudienceId,
-        createdByUserId: actorUserId,
-        status: 'DRAFT',
-      },
-      include: communicationInclude,
-    });
+    return withPublicReference('COM', (publicReference) =>
+      this.prisma.communication.create({
+        data: {
+          organisationId,
+          publicReference,
+          title: existing.title,
+          body: existing.body,
+          channels: existing.channels,
+          audienceCriteria: existing.audienceCriteria as Prisma.InputJsonValue,
+          savedAudienceId: existing.savedAudienceId,
+          createdByUserId: actorUserId,
+          status: 'DRAFT',
+        },
+        include: communicationInclude,
+      }),
+    );
   }
 
   /** Recipient + delivery snapshot for the detail view — real per-channel

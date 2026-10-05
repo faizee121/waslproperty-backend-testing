@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient, WorkOrderStatus } from '@prisma/client';
 import { recordActivity } from '../activity/activity.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '../../errors/AppError.js';
 import type { PaginatedResult } from '../../lib/pagination.js';
+import { withPublicReference } from '../../lib/public-reference.js';
 import { ContractorsService } from '../contractors/contractors.service.js';
 import { ContractorEligibilityService } from '../contractors/compliance/eligibility.service.js';
 import { AuthorizationService } from '../authorization/authorization.service.js';
@@ -17,9 +18,9 @@ import type {
 } from './work-orders.schemas.js';
 
 const workOrderInclude = {
-  property: { select: { id: true, name: true, code: true } },
-  space: { select: { id: true, name: true, code: true } },
-  maintenanceRequest: { select: { id: true, title: true, category: true } },
+  property: { select: { id: true, publicReference: true, name: true, code: true } },
+  space: { select: { id: true, publicReference: true, name: true, code: true } },
+  maintenanceRequest: { select: { id: true, publicReference: true, title: true, category: true } },
   contractor: { select: { id: true, name: true, companyName: true, status: true } },
   createdBy: { select: { id: true, firstName: true, lastName: true } },
   quotes: {
@@ -32,7 +33,7 @@ const workOrderInclude = {
   selectedQuote: {
     include: { contractor: { select: { id: true, name: true, companyName: true, email: true } } },
   },
-  quoteRound: { select: { id: true, title: true, dueAt: true } },
+  quoteRound: { select: { id: true, publicReference: true, title: true, dueAt: true } },
 } satisfies Prisma.WorkOrderInclude;
 
 /** Same shape as MaintenanceService's transition table — see that file's comment. */
@@ -116,38 +117,56 @@ export class WorkOrdersService {
       select: { currencyCode: true },
     });
 
-    const existing = await this.prisma.workOrder.findFirst({
-      where: { maintenanceRequestId: input.maintenanceRequestId, status: { not: 'CANCELLED' } },
-    });
-    if (existing) {
-      throw new ConflictError('This maintenance request already has a work order');
-    }
-    // Direct Work and an active RFQ round are mutually exclusive for the
-    // same request — a manager who's already out for competitive quotes
-    // shouldn't be able to also bypass that with a direct work order.
-    const activeRound = await this.prisma.quoteRound.findFirst({
-      where: { maintenanceRequestId: input.maintenanceRequestId, status: { in: ['DRAFT', 'OPEN'] } },
-    });
-    if (activeRound) {
-      throw new ConflictError('This maintenance request has an active quote round');
-    }
-
     return this.prisma.$transaction(async (tx) => {
-      const workOrder = await tx.workOrder.create({
-        data: {
-          organisationId,
-          propertyId: request.propertyId,
-          spaceId: request.spaceId,
-          maintenanceRequestId: request.id,
-          title: input.title,
-          description: input.description,
-          priority: input.priority,
-          status: 'DRAFT',
-          createdByUserId: actorUserId,
-          currencyCode: organisation.currencyCode,
-        },
-        include: workOrderInclude,
+      // Lock the MaintenanceRequest row for the rest of this transaction
+      // before re-checking either conflict condition below — without this,
+      // two concurrent create() calls (or a concurrent QuoteRoundsService
+      // .create(), which takes the exact same lock on the same row) can
+      // both pass a pre-transaction existence check against not-yet-
+      // committed state and both succeed, leaving this maintenance request
+      // with two simultaneously "active" procurement paths. Postgres
+      // serialises any second FOR UPDATE on this row until the first
+      // transaction commits or rolls back, so the loser's re-check below
+      // always sees the winner's already-committed row.
+      await tx.$queryRaw`SELECT id FROM maintenance_requests WHERE id = ${input.maintenanceRequestId} FOR UPDATE`;
+
+      const existing = await tx.workOrder.findFirst({
+        where: { maintenanceRequestId: input.maintenanceRequestId, status: { not: 'CANCELLED' } },
       });
+      if (existing) {
+        throw new ConflictError('This maintenance request already has a work order');
+      }
+      // Direct Work and an active RFQ round are mutually exclusive for the
+      // same request — a manager who's already out for competitive quotes
+      // shouldn't be able to also bypass that with a direct work order.
+      const activeRound = await tx.quoteRound.findFirst({
+        where: {
+          maintenanceRequestId: input.maintenanceRequestId,
+          status: { in: ['DRAFT', 'OPEN'] },
+        },
+      });
+      if (activeRound) {
+        throw new ConflictError('This maintenance request has an active quote round');
+      }
+
+      const workOrder = await withPublicReference('WO', (publicReference) =>
+        tx.workOrder.create({
+          data: {
+            organisationId,
+            publicReference,
+            propertyId: request.propertyId,
+            spaceId: request.spaceId,
+            maintenanceRequestId: request.id,
+            title: input.title,
+            description: input.description,
+            priority: input.priority,
+            status: 'DRAFT',
+            createdByUserId: actorUserId,
+            currencyCode: organisation.currencyCode,
+          },
+          include: workOrderInclude,
+        }),
+      );
 
       await tx.maintenanceRequest.update({
         where: { id: request.id },

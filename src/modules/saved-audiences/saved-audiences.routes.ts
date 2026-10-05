@@ -18,7 +18,23 @@ savedAudiencesRouter.use(authenticate);
 // assertAudienceWithinScope in communications.audience.ts, shared with
 // CommunicationsService since a saved audience is just a reusable
 // AudienceCriteria).
-savedAudiencesRouter.get('/', requireCapability('communications.view'), asyncHandler(listSavedAudiences));
-savedAudiencesRouter.post('/', requireCapability('communications.manage'), asyncHandler(createSavedAudience));
-savedAudiencesRouter.patch('/:id', requireCapability('communications.manage'), asyncHandler(updateSavedAudience));
-savedAudiencesRouter.delete('/:id', requireCapability('communications.manage'), asyncHandler(deleteSavedAudience));
+savedAudiencesRouter.get(
+  '/',
+  requireCapability('communications.view'),
+  asyncHandler(listSavedAudiences),
+);
+savedAudiencesRouter.post(
+  '/',
+  requireCapability('communications.manage'),
+  asyncHandler(createSavedAudience),
+);
+savedAudiencesRouter.patch(
+  '/:id',
+  requireCapability('communications.manage'),
+  asyncHandler(updateSavedAudience),
+);
+savedAudiencesRouter.delete(
+  '/:id',
+  requireCapability('communications.manage'),
+  asyncHandler(deleteSavedAudience),
+);

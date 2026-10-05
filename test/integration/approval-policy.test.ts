@@ -129,7 +129,10 @@ async function setupRfqRound(accessToken: string, contractorIds: string[]) {
       scopeDescription: 'Diagnose and repair rooftop condenser unit.',
       contractorIds,
     });
-  return roundRes.body as { id: string; invitations: Array<{ id: string; contractorId: string; quoteId: string }> };
+  return roundRes.body as {
+    id: string;
+    invitations: Array<{ id: string; contractorId: string; quoteId: string }>;
+  };
 }
 
 describe('organisation approval & acceptance policy', () => {
@@ -196,7 +199,7 @@ describe('organisation approval & acceptance policy', () => {
   });
 
   describe('organisation isolation', () => {
-    it('org A cannot see or affect org B\'s policy', async () => {
+    it("org A cannot see or affect org B's policy", async () => {
       const orgA = await registerTestUser(app);
       const orgB = await registerTestUser(app);
 
@@ -272,9 +275,15 @@ describe('organisation approval & acceptance policy', () => {
       const b = await setupWorkOrderWithContractor(accessToken, 1000.0);
       const c = await setupWorkOrderWithContractor(accessToken, 1000.01);
 
-      const quoteA = await request(app).get(`/api/v1/quotes/${a.quoteId}`).set(authHeader(accessToken));
-      const quoteB = await request(app).get(`/api/v1/quotes/${b.quoteId}`).set(authHeader(accessToken));
-      const quoteC = await request(app).get(`/api/v1/quotes/${c.quoteId}`).set(authHeader(accessToken));
+      const quoteA = await request(app)
+        .get(`/api/v1/quotes/${a.quoteId}`)
+        .set(authHeader(accessToken));
+      const quoteB = await request(app)
+        .get(`/api/v1/quotes/${b.quoteId}`)
+        .set(authHeader(accessToken));
+      const quoteC = await request(app)
+        .get(`/api/v1/quotes/${c.quoteId}`)
+        .set(authHeader(accessToken));
 
       expect(quoteA.body.workflowMode).toBe('NONE');
       expect(quoteB.body.workflowMode).toBe('NONE');
@@ -291,8 +300,12 @@ describe('organisation approval & acceptance policy', () => {
       const a = await setupWorkOrderWithContractor(accessToken, 5000.0);
       const b = await setupWorkOrderWithContractor(accessToken, 5000.01);
 
-      const quoteA = await request(app).get(`/api/v1/quotes/${a.quoteId}`).set(authHeader(accessToken));
-      const quoteB = await request(app).get(`/api/v1/quotes/${b.quoteId}`).set(authHeader(accessToken));
+      const quoteA = await request(app)
+        .get(`/api/v1/quotes/${a.quoteId}`)
+        .set(authHeader(accessToken));
+      const quoteB = await request(app)
+        .get(`/api/v1/quotes/${b.quoteId}`)
+        .set(authHeader(accessToken));
 
       expect(quoteA.body.workflowMode).toBe('APPROVAL_ONLY');
       expect(quoteB.body.workflowMode).toBe('APPROVAL_THEN_SIGNATURE');
@@ -329,20 +342,22 @@ describe('organisation approval & acceptance policy', () => {
       const workOrderRes = await request(app)
         .post('/api/v1/work-orders')
         .set(authHeader(accessToken))
-        .send({ maintenanceRequestId: requestRes.body.id, title: 'Fix leak', description: 'x', priority: 'HIGH' });
+        .send({
+          maintenanceRequestId: requestRes.body.id,
+          title: 'Fix leak',
+          description: 'x',
+          priority: 'HIGH',
+        });
       const contractorRes = await request(app)
         .post('/api/v1/contractors')
         .set(authHeader(accessToken))
         .send({ name: 'Acme Plumbing', email: 'ops@acmeplumb.com', tradeTypes: ['PLUMBING'] });
-      const quoteRes = await request(app)
-        .post('/api/v1/quotes')
-        .set(authHeader(accessToken))
-        .send({
-          workOrderId: workOrderRes.body.id,
-          contractorId: contractorRes.body.id,
-          amount: 9000,
-          currencyCode: 'USD',
-        });
+      const quoteRes = await request(app).post('/api/v1/quotes').set(authHeader(accessToken)).send({
+        workOrderId: workOrderRes.body.id,
+        contractorId: contractorRes.body.id,
+        amount: 9000,
+        currencyCode: 'USD',
+      });
 
       expect(quoteRes.body.workflowMode).toBeNull();
       expect(quoteRes.body.requiredWorkflowMode).toBeNull();
@@ -436,7 +451,7 @@ describe('organisation approval & acceptance policy', () => {
   });
 
   describe('historical immutability', () => {
-    it('changing the policy after a quote is awarded never mutates that quote\'s already-resolved workflow', async () => {
+    it("changing the policy after a quote is awarded never mutates that quote's already-resolved workflow", async () => {
       const { accessToken } = await registerTestUser(app);
       await request(app)
         .put('/api/v1/organisations/me/approval-policy')
@@ -444,7 +459,9 @@ describe('organisation approval & acceptance policy', () => {
         .send(threeTierPolicy);
 
       const { quoteId, workOrderId } = await setupWorkOrderWithContractor(accessToken, 7500);
-      const before = await request(app).get(`/api/v1/quotes/${quoteId}`).set(authHeader(accessToken));
+      const before = await request(app)
+        .get(`/api/v1/quotes/${quoteId}`)
+        .set(authHeader(accessToken));
       expect(before.body.workflowMode).toBe('APPROVAL_THEN_SIGNATURE');
 
       // Organisation changes its mind entirely — everything now NONE.
@@ -457,7 +474,9 @@ describe('organisation approval & acceptance policy', () => {
           rules: [{ maxAmount: null, workflowMode: 'NONE' }],
         });
 
-      const after = await request(app).get(`/api/v1/quotes/${quoteId}`).set(authHeader(accessToken));
+      const after = await request(app)
+        .get(`/api/v1/quotes/${quoteId}`)
+        .set(authHeader(accessToken));
       expect(after.body.workflowMode).toBe('APPROVAL_THEN_SIGNATURE');
       expect(after.body.requiredWorkflowMode).toBe('APPROVAL_THEN_SIGNATURE');
 
@@ -509,7 +528,9 @@ describe('organisation approval & acceptance policy', () => {
       const { accessToken } = await registerTestUser(app);
       const { quoteId, workOrderId } = await setupWorkOrderWithContractor(accessToken, 50000);
 
-      const quote = await request(app).get(`/api/v1/quotes/${quoteId}`).set(authHeader(accessToken));
+      const quote = await request(app)
+        .get(`/api/v1/quotes/${quoteId}`)
+        .set(authHeader(accessToken));
       expect(quote.body.workflowMode).toBeNull();
 
       const toReady = await request(app)
@@ -629,7 +650,9 @@ describe('organisation approval & acceptance policy', () => {
       expect(policy.body.rules).toHaveLength(3);
 
       const { quoteId } = await setupWorkOrderWithContractor(accessToken, 7500);
-      const quote = await request(app).get(`/api/v1/quotes/${quoteId}`).set(authHeader(accessToken));
+      const quote = await request(app)
+        .get(`/api/v1/quotes/${quoteId}`)
+        .set(authHeader(accessToken));
       expect(quote.body.workflowMode).toBeNull();
     });
   });
