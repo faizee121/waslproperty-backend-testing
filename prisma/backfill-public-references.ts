@@ -32,66 +32,71 @@ interface BackfillTarget {
   setReference: (id: string, publicReference: string) => Promise<unknown>;
 }
 
+/** Raw SQL, not Prisma's ORM filter — `publicReference` is a NOT NULL
+ * column in the CURRENT schema (migration 20261004092405), so Prisma's
+ * generated client now rejects `{ publicReference: null }` as an invalid
+ * filter for this field at the argument-validation layer, before a query
+ * is even built; it would reject it identically for every one of these 7
+ * tables even though the column may still genuinely contain NULLs in a
+ * database this migration hasn't successfully applied to yet (its own
+ * precondition for being able to apply: this backfill has already run).
+ * See test/integration/public-references.test.ts's identical fix for the
+ * one test that hit this same wall, and strata.service.ts's doc comment
+ * on the parallel case this kept failing to apply. */
+function findMissingRaw(table: string): () => Promise<{ id: string }[]> {
+  return () =>
+    prisma.$queryRawUnsafe<{ id: string }[]>(
+      `SELECT id FROM "${table}" WHERE "publicReference" IS NULL`,
+    );
+}
+
 const targets: BackfillTarget[] = [
   {
     label: 'Property',
     prefix: 'PROP',
-    findMissing: () =>
-      prisma.property.findMany({ where: { publicReference: null }, select: { id: true } }),
+    findMissing: findMissingRaw('properties'),
     setReference: (id, publicReference) =>
       prisma.property.update({ where: { id }, data: { publicReference } }),
   },
   {
     label: 'Space',
     prefix: 'LOT',
-    findMissing: () =>
-      prisma.space.findMany({ where: { publicReference: null }, select: { id: true } }),
+    findMissing: findMissingRaw('spaces'),
     setReference: (id, publicReference) =>
       prisma.space.update({ where: { id }, data: { publicReference } }),
   },
   {
     label: 'MaintenanceRequest',
     prefix: 'MR',
-    findMissing: () =>
-      prisma.maintenanceRequest.findMany({
-        where: { publicReference: null },
-        select: { id: true },
-      }),
+    findMissing: findMissingRaw('maintenance_requests'),
     setReference: (id, publicReference) =>
       prisma.maintenanceRequest.update({ where: { id }, data: { publicReference } }),
   },
   {
     label: 'WorkOrder',
     prefix: 'WO',
-    findMissing: () =>
-      prisma.workOrder.findMany({ where: { publicReference: null }, select: { id: true } }),
+    findMissing: findMissingRaw('work_orders'),
     setReference: (id, publicReference) =>
       prisma.workOrder.update({ where: { id }, data: { publicReference } }),
   },
   {
     label: 'QuoteRound',
     prefix: 'RFQ',
-    findMissing: () =>
-      prisma.quoteRound.findMany({ where: { publicReference: null }, select: { id: true } }),
+    findMissing: findMissingRaw('quote_rounds'),
     setReference: (id, publicReference) =>
       prisma.quoteRound.update({ where: { id }, data: { publicReference } }),
   },
   {
     label: 'WorkOrderVariation',
     prefix: 'VAR',
-    findMissing: () =>
-      prisma.workOrderVariation.findMany({
-        where: { publicReference: null },
-        select: { id: true },
-      }),
+    findMissing: findMissingRaw('work_order_variations'),
     setReference: (id, publicReference) =>
       prisma.workOrderVariation.update({ where: { id }, data: { publicReference } }),
   },
   {
     label: 'Communication',
     prefix: 'COM',
-    findMissing: () =>
-      prisma.communication.findMany({ where: { publicReference: null }, select: { id: true } }),
+    findMissing: findMissingRaw('communications'),
     setReference: (id, publicReference) =>
       prisma.communication.update({ where: { id }, data: { publicReference } }),
   },
