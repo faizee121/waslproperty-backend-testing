@@ -1049,4 +1049,361 @@ describe('strata Units of Entitlement (M11-B)', () => {
       expect(res.status).toBe(404);
     });
   });
+
+  describe('lot number uniqueness within a property', () => {
+    it('rejects a second new lot with the same lot number via bulkSetLots (sequential)', async () => {
+      const { accessToken } = await registerAuOrg();
+      const property = await createProperty(accessToken);
+      await enableStrata(accessToken, property.id);
+
+      const first = await setLots(accessToken, property.id, [
+        { kind: 'new', name: 'Lot 1', code: 'L1', lotNumber: 'Lot 1', unitsOfEntitlement: 10 },
+      ]);
+      expect(first.status).toBe(200);
+
+      const second = await setLots(accessToken, property.id, [
+        {
+          kind: 'new',
+          name: 'Lot 1 Duplicate',
+          code: 'L1-DUP',
+          lotNumber: 'Lot 1',
+          unitsOfEntitlement: 5,
+        },
+      ]);
+      expect(second.status).toBe(409);
+      expect(second.body.error.message).toMatch(/already used/i);
+    });
+
+    it('rejects assigning an already-used lot number to a different existing space via classifySpaces', async () => {
+      const { accessToken } = await registerAuOrg();
+      const property = await createProperty(accessToken);
+      const unitA = await createSpace(accessToken, property.id, { name: 'Unit A', code: 'UA' });
+      const unitB = await createSpace(accessToken, property.id, { name: 'Unit B', code: 'UB' });
+      await enableStrata(accessToken, property.id);
+
+      const firstClassify = await classifySpaces(accessToken, property.id, [
+        { spaceId: unitA.id, classification: 'LOT', lotNumber: '7', unitsOfEntitlement: 10 },
+      ]);
+      expect(firstClassify.status).toBe(200);
+
+      const secondClassify = await classifySpaces(accessToken, property.id, [
+        { spaceId: unitB.id, classification: 'LOT', lotNumber: '7', unitsOfEntitlement: 10 },
+      ]);
+      expect(secondClassify.status).toBe(409);
+
+      // Re-assigning a space's OWN existing lot number to itself must
+      // never be treated as a self-collision.
+      const reassignSelf = await classifySpaces(accessToken, property.id, [
+        { spaceId: unitA.id, classification: 'LOT', lotNumber: '7', unitsOfEntitlement: 12 },
+      ]);
+      expect(reassignSelf.status).toBe(200);
+    });
+
+    it('a genuine concurrent race for the same new lot number is caught by the DB constraint, not silently double-applied', async () => {
+      const { accessToken } = await registerAuOrg();
+      const property = await createProperty(accessToken);
+      await enableStrata(accessToken, property.id);
+
+      const [resA, resB] = await Promise.all([
+        setLots(accessToken, property.id, [
+          {
+            kind: 'new',
+            name: 'Lot Race A',
+            code: 'RACE-A',
+            lotNumber: 'Lot 9',
+            unitsOfEntitlement: 10,
+          },
+        ]),
+        setLots(accessToken, property.id, [
+          {
+            kind: 'new',
+            name: 'Lot Race B',
+            code: 'RACE-B',
+            lotNumber: 'Lot 9',
+            unitsOfEntitlement: 10,
+          },
+        ]),
+      ]);
+
+      const statuses = [resA.status, resB.status].sort();
+      // One wins (200), one loses — cleanly, never two 500s and never two
+      // 200s (which would mean the constraint didn't actually fire).
+      expect(statuses).toEqual([200, 409]);
+
+      const lotCount = await testPrisma.space.count({
+        where: { propertyId: property.id, lotNumber: 'Lot 9' },
+      });
+      expect(lotCount).toBe(1);
+    });
+
+    it('the same lot number is allowed on two different properties', async () => {
+      const { accessToken } = await registerAuOrg();
+      const propertyA = await createProperty(accessToken, { code: 'PROP-A' });
+      const propertyB = await createProperty(accessToken, { code: 'PROP-B' });
+      await enableStrata(accessToken, propertyA.id);
+      await enableStrata(accessToken, propertyB.id);
+
+      const resA = await setLots(accessToken, propertyA.id, [
+        { kind: 'new', name: 'Lot 1', code: 'A-L1', lotNumber: 'Lot 1', unitsOfEntitlement: 10 },
+      ]);
+      const resB = await setLots(accessToken, propertyB.id, [
+        { kind: 'new', name: 'Lot 1', code: 'B-L1', lotNumber: 'Lot 1', unitsOfEntitlement: 10 },
+      ]);
+      expect(resA.status).toBe(200);
+      expect(resB.status).toBe(200);
+    });
+
+    it('multiple Common Property / Unclassified spaces (null lotNumber) never collide with each other', async () => {
+      const { accessToken } = await registerAuOrg();
+      const property = await createProperty(accessToken);
+      const lobby = await createSpace(accessToken, property.id, { name: 'Lobby', code: 'LOBBY' });
+      const gym = await createSpace(accessToken, property.id, { name: 'Gym', code: 'GYM' });
+      // Deliberately created but never classified below — it stays
+      // UNCLASSIFIED with a null lotNumber, same as lobby/gym.
+      await createSpace(accessToken, property.id, { name: 'Plant Room', code: 'PLANT' });
+      await enableStrata(accessToken, property.id);
+
+      const res = await classifySpaces(accessToken, property.id, [
+        { spaceId: lobby.id, classification: 'COMMON_PROPERTY' },
+        { spaceId: gym.id, classification: 'COMMON_PROPERTY' },
+        // plantRoom stays UNCLASSIFIED — also lotNumber: null.
+      ]);
+      expect(res.status).toBe(200);
+
+      const nullLotNumberCount = await testPrisma.space.count({
+        where: { propertyId: property.id, lotNumber: null },
+      });
+      expect(nullLotNumberCount).toBe(3); // lobby, gym, and the never-touched plantRoom
+    });
+
+    it("SpacesService.update rejects reusing another space's lot number directly (outside the strata wizard)", async () => {
+      const { accessToken } = await registerAuOrg();
+      const property = await createProperty(accessToken);
+      const unitA = await createSpace(accessToken, property.id, { name: 'Unit A', code: 'UA' });
+      const unitB = await createSpace(accessToken, property.id, { name: 'Unit B', code: 'UB' });
+      await enableStrata(accessToken, property.id);
+
+      const setA = await request(app)
+        .patch(`/api/v1/spaces/${unitA.id}`)
+        .set(authHeader(accessToken))
+        .send({ strataClassification: 'LOT', lotNumber: '42', entitlementValue: 10 });
+      expect(setA.status).toBe(200);
+
+      const setB = await request(app)
+        .patch(`/api/v1/spaces/${unitB.id}`)
+        .set(authHeader(accessToken))
+        .send({ strataClassification: 'LOT', lotNumber: '42', entitlementValue: 10 });
+      expect(setB.status).toBe(409);
+      expect(setB.body.error.message).toMatch(/already used/i);
+    });
+  });
+
+  describe('reconciliation drift on an ACTIVE scheme', () => {
+    async function createActiveScheme(accessToken: string) {
+      const property = await createProperty(accessToken);
+      await enableStrata(accessToken, property.id, {
+        strataPlanNumber: 'SP1',
+        strataPlanDeclaredUnitsOfEntitlement: 25,
+      });
+      await setLots(accessToken, property.id, [
+        { kind: 'new', name: 'Lot 1', code: 'L1', lotNumber: '1', unitsOfEntitlement: 15 },
+        { kind: 'new', name: 'Lot 2', code: 'L2', lotNumber: '2', unitsOfEntitlement: 10 },
+      ]);
+      const completeRes = await request(app)
+        .post(`/api/v1/properties/${property.id}/strata/complete`)
+        .set(authHeader(accessToken));
+      expect(completeRes.status).toBe(200);
+      expect(completeRes.body.strataStatus).toBe('ACTIVE');
+      return property;
+    }
+
+    it('editing a lot UOE on an ACTIVE scheme is always allowed, even when it breaks reconciliation — but records a warning signal', async () => {
+      const { accessToken } = await registerAuOrg();
+      const property = await createActiveScheme(accessToken);
+      const summaryBefore = await getStrataSummary(accessToken, property.id);
+      const lot1 = summaryBefore.body.lots.find((l: { lotNumber: string }) => l.lotNumber === '1');
+
+      const setRes = await setLots(accessToken, property.id, [
+        { kind: 'existing', spaceId: lot1.spaceId, lotNumber: '1', unitsOfEntitlement: 999 },
+      ]);
+      // The edit itself is never blocked — only completeSetup() gates on
+      // reconciliation, never a later edit to an already-ACTIVE scheme.
+      expect(setRes.status).toBe(200);
+
+      const summary = await getStrataSummary(accessToken, property.id);
+      expect(summary.body.strataStatus).toBe('ACTIVE');
+      expect(summary.body.reconciliation.isComplete).toBe(false);
+
+      const warning = await testPrisma.activityEvent.findFirst({
+        where: { propertyId: property.id, eventType: 'STRATA_RECONCILIATION_MISMATCH' },
+      });
+      expect(warning).not.toBeNull();
+      expect(warning!.title).toMatch(/no longer reconciled/i);
+    });
+
+    it('a lot edit on an ACTIVE scheme that never changes its Units of Entitlement (e.g. renumbering) leaves reconciliation intact and never records a warning', async () => {
+      const { accessToken } = await registerAuOrg();
+      const property = await createActiveScheme(accessToken);
+      const summaryBefore = await getStrataSummary(accessToken, property.id);
+      expect(summaryBefore.body.reconciliation.isComplete).toBe(true);
+      const lot1 = summaryBefore.body.lots.find((l: { lotNumber: string }) => l.lotNumber === '1');
+
+      // Renumber Lot 1 without touching its entitlement — the allocated
+      // total stays exactly 25, so reconciliation never breaks.
+      const renumberRes = await request(app)
+        .patch(`/api/v1/spaces/${lot1.spaceId}`)
+        .set(authHeader(accessToken))
+        .send({ lotNumber: '1A' });
+      expect(renumberRes.status).toBe(200);
+
+      const summaryAfter = await getStrataSummary(accessToken, property.id);
+      expect(summaryAfter.body.reconciliation.isComplete).toBe(true);
+      expect(summaryAfter.body.reconciliation.allocatedTotal).toBe(25);
+
+      const warning = await testPrisma.activityEvent.findFirst({
+        where: { propertyId: property.id, eventType: 'STRATA_RECONCILIATION_MISMATCH' },
+      });
+      expect(warning).toBeNull();
+    });
+
+    it('refuses to create a new Lot on an ACTIVE scheme via SpacesService when the scheme is already fully allocated, with a clear message, and creates nothing', async () => {
+      const { accessToken } = await registerAuOrg();
+      const property = await createActiveScheme(accessToken);
+
+      const createRes = await request(app)
+        .post(`/api/v1/properties/${property.id}/spaces`)
+        .set(authHeader(accessToken))
+        .send({
+          name: 'Unit 3',
+          code: 'U3',
+          spaceType: 'APARTMENT',
+          strataClassification: 'LOT',
+          lotNumber: '3',
+          entitlementValue: 5,
+        });
+      expect(createRes.status).toBe(409);
+      expect(createRes.body.error.message).toMatch(/already fully allocated/i);
+      expect(createRes.body.error.message).toMatch(/30 of the declared 25/i);
+      expect(createRes.body.error.details).toEqual({
+        declaredTotal: 25,
+        allocatedTotal: 25,
+        requested: 5,
+        remainingCapacity: 0,
+      });
+
+      // Nothing was created — not the Space, not a warning (this is a
+      // hard block, not the warning-signal path), and reconciliation is
+      // untouched.
+      const createdSpace = await testPrisma.space.findFirst({
+        where: { propertyId: property.id, code: 'U3' },
+      });
+      expect(createdSpace).toBeNull();
+
+      const summary = await getStrataSummary(accessToken, property.id);
+      expect(summary.body.reconciliation.isComplete).toBe(true);
+      expect(summary.body.reconciliation.allocatedTotal).toBe(25);
+
+      const warning = await testPrisma.activityEvent.findFirst({
+        where: { propertyId: property.id, eventType: 'STRATA_RECONCILIATION_MISMATCH' },
+      });
+      expect(warning).toBeNull();
+    });
+
+    it("also refuses via the strata wizard's bulkSetLots (PUT lots) when it would exceed the declared total on an ACTIVE scheme", async () => {
+      const { accessToken } = await registerAuOrg();
+      const property = await createActiveScheme(accessToken);
+
+      const setRes = await setLots(accessToken, property.id, [
+        { kind: 'new', name: 'Lot 3', code: 'L3', lotNumber: '3', unitsOfEntitlement: 1 },
+      ]);
+      expect(setRes.status).toBe(409);
+      expect(setRes.body.error.message).toMatch(/already fully allocated/i);
+
+      const lots = await testPrisma.space.findMany({
+        where: { propertyId: property.id, strataClassification: 'LOT' },
+      });
+      expect(lots).toHaveLength(2); // still just Lot 1 and Lot 2
+    });
+
+    it('also refuses via classifySpaces when reclassifying an existing Common Property/Unclassified space to LOT would exceed the declared total', async () => {
+      const { accessToken } = await registerAuOrg();
+      const property = await createActiveScheme(accessToken);
+      const plantRoom = await createSpace(accessToken, property.id, {
+        name: 'Plant Room',
+        code: 'PLANT',
+        strataClassification: 'COMMON_PROPERTY',
+      });
+
+      const classifyRes = await classifySpaces(accessToken, property.id, [
+        { spaceId: plantRoom.id, classification: 'LOT', lotNumber: '3', unitsOfEntitlement: 5 },
+      ]);
+      expect(classifyRes.status).toBe(409);
+      expect(classifyRes.body.error.message).toMatch(/already fully allocated/i);
+
+      const unchanged = await testPrisma.space.findUnique({ where: { id: plantRoom.id } });
+      expect(unchanged?.strataClassification).toBe('COMMON_PROPERTY');
+    });
+
+    it('still allows creating a new Lot on an ACTIVE scheme when there is genuine remaining capacity', async () => {
+      const { accessToken } = await registerAuOrg();
+      const property = await createActiveScheme(accessToken); // ACTIVE, 25/25, fully reconciled
+
+      // The declared total itself is later revised upward (e.g. the
+      // registered plan is amended, or a correction is made) — a real,
+      // independent operation (updatePlan), never something
+      // assertNewAllocationFits performs itself. This genuinely opens up
+      // capacity on an already-ACTIVE scheme.
+      const planRes = await request(app)
+        .patch(`/api/v1/properties/${property.id}/strata/plan`)
+        .set(authHeader(accessToken))
+        .send({ strataPlanDeclaredUnitsOfEntitlement: 30 });
+      expect(planRes.status).toBe(200);
+
+      const createRes = await request(app)
+        .post(`/api/v1/properties/${property.id}/spaces`)
+        .set(authHeader(accessToken))
+        .send({
+          name: 'Unit 3',
+          code: 'U3',
+          spaceType: 'APARTMENT',
+          strataClassification: 'LOT',
+          lotNumber: '3',
+          entitlementValue: 5,
+        });
+      expect(createRes.status).toBe(201);
+
+      const summary = await getStrataSummary(accessToken, property.id);
+      expect(summary.body.reconciliation.allocatedTotal).toBe(30);
+    });
+
+    it('refuses via PATCH /spaces/:id when an existing non-lot space becomes a Lot and would exceed the declared total — but never blocks editing a space that is already a Lot', async () => {
+      const { accessToken } = await registerAuOrg();
+      const property = await createActiveScheme(accessToken);
+      const storageRoom = await createSpace(accessToken, property.id, {
+        name: 'Storage Room',
+        code: 'STORE',
+        strataClassification: 'COMMON_PROPERTY',
+      });
+
+      const becomeLotRes = await request(app)
+        .patch(`/api/v1/spaces/${storageRoom.id}`)
+        .set(authHeader(accessToken))
+        .send({ strataClassification: 'LOT', lotNumber: '3', entitlementValue: 5 });
+      expect(becomeLotRes.status).toBe(409);
+      expect(becomeLotRes.body.error.message).toMatch(/already fully allocated/i);
+
+      const unchanged = await testPrisma.space.findUnique({ where: { id: storageRoom.id } });
+      expect(unchanged?.strataClassification).toBe('COMMON_PROPERTY');
+
+      // Contrast: editing an EXISTING lot's own entitlement on the same
+      // over-capacity scheme is still never blocked by this gate.
+      const summaryBefore = await getStrataSummary(accessToken, property.id);
+      const lot1 = summaryBefore.body.lots.find((l: { lotNumber: string }) => l.lotNumber === '1');
+      const editExistingRes = await request(app)
+        .patch(`/api/v1/spaces/${lot1.spaceId}`)
+        .set(authHeader(accessToken))
+        .send({ strataClassification: 'LOT', lotNumber: '1', entitlementValue: 500 });
+      expect(editExistingRes.status).toBe(200);
+    });
+  });
 });

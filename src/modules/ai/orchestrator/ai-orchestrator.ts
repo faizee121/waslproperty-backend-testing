@@ -2,11 +2,13 @@ import type { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthContext } from '../../../middlewares/auth.middleware.js';
 import { env } from '../../../config/env.js';
+import { logger } from '../../../lib/logger.js';
 import { getAiProvider } from '../providers/provider-factory.js';
 import type {
   AiProviderMessage,
   AiToolDefinitionForProvider,
 } from '../providers/ai-provider.interface.js';
+import { AiProviderError } from '../providers/provider-error.js';
 import { AI_TOOLS } from '../tools/tools.js';
 import { executeAiTool, AiToolExecutionError } from '../gateway/tool-gateway.js';
 import { ExecutionBudget, AiBudgetExceededError } from '../budget/execution-budget.js';
@@ -188,6 +190,7 @@ export async function runAiOrchestration(
     };
   }
 
+  const startedAt = Date.now();
   const budget = new ExecutionBudget();
   const systemPrompt = [
     buildSystemPrompt(params.resourceContext, params.responseIntent),
@@ -286,7 +289,33 @@ export async function runAiOrchestration(
       }
     }
   } catch (err) {
+    // Safe, metadata-only diagnostics for every orchestration-aborting
+    // failure — provider, model, kind/status, org/user, tool names, and
+    // elapsed time, deliberately NEVER the prompt, conversation content,
+    // tool arguments/results, or (for a provider failure) the provider's
+    // raw response body — see AiProviderError's doc comment. This is the
+    // one place AI failures become server-side observable; before this,
+    // a DeepSeek outage or a bad API key failed silently into a generic
+    // user-facing message with nothing in the logs to diagnose it.
+    const latencyMs = Date.now() - startedAt;
+    const baseLogFields = {
+      provider: provider.name,
+      model: provider.model,
+      organisationId: params.organisationId,
+      userId: params.auth.userId,
+      toolNames,
+      latencyMs,
+    };
+
     if (err instanceof AiBudgetExceededError) {
+      logger.warn(
+        {
+          ...baseLogFields,
+          event: 'ai_orchestration_budget_exceeded',
+          guardrailEvent: err.guardrailEvent,
+        },
+        'AI orchestration aborted: execution budget exceeded',
+      );
       return {
         response: fallbackResponse(
           "I wasn't able to finish this investigation within the allotted steps — try narrowing your question to one request, quote, or property.",
@@ -298,15 +327,72 @@ export async function runAiOrchestration(
         model: provider.model,
       };
     }
+
+    if (err instanceof AiProviderError) {
+      const eventByKind: Record<typeof err.kind, string> = {
+        TIMEOUT: 'ai_provider_timeout',
+        AUTH_ERROR: 'ai_provider_auth_failure',
+        HTTP_ERROR: 'ai_provider_http_failure',
+        MALFORMED_RESPONSE: 'ai_provider_malformed_response',
+        NETWORK_ERROR: 'ai_provider_network_error',
+      };
+      logger.error(
+        {
+          ...baseLogFields,
+          event: eventByKind[err.kind],
+          providerErrorKind: err.kind,
+          providerErrorStatus: err.status,
+          errorMessage: err.message,
+        },
+        'AI orchestration aborted: provider call failed',
+      );
+      return {
+        response: fallbackResponse(
+          'Something went wrong while investigating this — please try again.',
+        ),
+        toolNames,
+        guardrailEvent: 'PROVIDER_ERROR',
+        usage,
+        provider: provider.name,
+        model: provider.model,
+      };
+    }
+
+    if (err instanceof AiToolExecutionError && err.code === 'UNKNOWN_TOOL') {
+      logger.error(
+        { ...baseLogFields, event: 'ai_unexpected_tool_failure', errorMessage: err.message },
+        'AI orchestration aborted: unexpected tool failure',
+      );
+      return {
+        response: fallbackResponse(
+          'Something went wrong while investigating this — please try again.',
+        ),
+        toolNames,
+        guardrailEvent: 'UNKNOWN_TOOL_REJECTED',
+        usage,
+        provider: provider.name,
+        model: provider.model,
+      };
+    }
+
+    // Anything else is a genuine, unanticipated orchestration bug — log
+    // only the error's name/constructor, never its message, since unlike
+    // the branches above this one was not constructed by code we control
+    // and so has no guarantee of being safe to persist into logs.
+    logger.error(
+      {
+        ...baseLogFields,
+        event: 'ai_orchestration_failure',
+        errorName: err instanceof Error ? err.name : typeof err,
+      },
+      'AI orchestration aborted: unexpected error',
+    );
     return {
       response: fallbackResponse(
         'Something went wrong while investigating this — please try again.',
       ),
       toolNames,
-      guardrailEvent:
-        err instanceof AiToolExecutionError && err.code === 'UNKNOWN_TOOL'
-          ? 'UNKNOWN_TOOL_REJECTED'
-          : 'PROVIDER_ERROR',
+      guardrailEvent: 'PROVIDER_ERROR',
       usage,
       provider: provider.name,
       model: provider.model,

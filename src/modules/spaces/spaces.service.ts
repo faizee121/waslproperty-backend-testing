@@ -5,7 +5,11 @@ import { getOccupiedSpaceIds, type Occupancy } from '../../lib/occupancy.js';
 import type { PaginatedResult, PaginationQuery } from '../../lib/pagination.js';
 import { withPublicReference } from '../../lib/public-reference.js';
 import { assertOrganisationFeature } from '../organisations/organisation-features.js';
-import { resolveSpaceClassification } from '../strata/strata.service.js';
+import {
+  assertNewAllocationFits,
+  checkStrataReconciliationDrift,
+  resolveSpaceClassification,
+} from '../strata/strata.service.js';
 import type { CreateSpaceInput, UpdateSpaceInput } from './spaces.schemas.js';
 
 /** See PropertiesService's identically-named helper — same trigger
@@ -24,6 +28,22 @@ function touchesStrataFields(input: CreateSpaceInput | UpdateSpaceInput): boolea
  * new, expressive path). The legacy bare `isStrataLot` boolean predates
  * this rule and stays exactly as permissive as it always was, for
  * backward compatibility with M11-A data/callers. */
+/** Mirrors strata.service.ts's identically-named/purposed helper — a lot
+ * number collision is enforced at the DB level (a partial unique index on
+ * (propertyId, lotNumber); see Space's schema.prisma doc comment). `code`
+ * uniqueness is pre-checked separately before every write below, so a
+ * P2002 reaching here is checked against the actual constraint name
+ * Postgres reports rather than assumed. */
+function isLotNumberConflict(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === 'object' &&
+    'code' in err &&
+    (err as { code: unknown }).code === 'P2002' &&
+    String((err as { meta?: { target?: unknown } }).meta?.target ?? '').includes('lotNumber')
+  );
+}
+
 function assertLotHasRequiredFields(
   lotNumber: string | null | undefined,
   entitlementValue: unknown,
@@ -63,6 +83,26 @@ export class SpacesService {
       throw new NotFoundError('Property not found');
     }
     return property;
+  }
+
+  /** Mirrors StrataService's identically-named/purposed helper — good-UX
+   * pre-check for the DB-level partial unique index on (propertyId,
+   * lotNumber); isLotNumberConflict at each actual write below is what's
+   * authoritative for a genuine concurrent race. */
+  private async assertLotNumberAvailable(
+    propertyId: string,
+    lotNumber: string | null | undefined,
+    excludeSpaceId?: string,
+  ) {
+    if (!lotNumber) return;
+    const clash = await this.prisma.space.findFirst({
+      where: { propertyId, lotNumber, ...(excludeSpaceId ? { NOT: { id: excludeSpaceId } } : {}) },
+    });
+    if (clash) {
+      throw new ConflictError(
+        `Lot number "${lotNumber}" is already used by another space on this property`,
+      );
+    }
   }
 
   async listByProperty(
@@ -168,6 +208,7 @@ export class SpacesService {
       classification = resolveSpaceClassification('UNCLASSIFIED', input);
       if (classification === 'LOT' && input.strataClassification === 'LOT') {
         assertLotHasRequiredFields(input.lotNumber, input.entitlementValue);
+        await this.assertLotNumberAvailable(propertyId, input.lotNumber);
       }
     }
 
@@ -188,18 +229,37 @@ export class SpacesService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      const space = await withPublicReference('LOT', (publicReference) =>
-        tx.space.create({
-          data: {
-            organisationId,
-            propertyId,
-            publicReference,
-            ...input,
-            strataClassification: classification,
-            isStrataLot: classification === 'LOT',
-          },
-        }),
-      );
+      // A brand-new Space has no "previous" allocation — if it's being
+      // created as a LOT at all, its whole entitlementValue is new
+      // capacity, checked against the scheme's declared total before it's
+      // ever created. See assertNewAllocationFits' doc comment for why
+      // this is a hard gate, unlike the warning signal below it.
+      if (classification === 'LOT') {
+        await assertNewAllocationFits(tx, propertyId, Number(input.entitlementValue ?? 0));
+      }
+
+      let space;
+      try {
+        space = await withPublicReference('LOT', (publicReference) =>
+          tx.space.create({
+            data: {
+              organisationId,
+              propertyId,
+              publicReference,
+              ...input,
+              strataClassification: classification,
+              isStrataLot: classification === 'LOT',
+            },
+          }),
+        );
+      } catch (err) {
+        if (isLotNumberConflict(err)) {
+          throw new ConflictError(
+            `Lot number "${input.lotNumber}" is already used by another space on this property`,
+          );
+        }
+        throw err;
+      }
 
       await recordActivity(tx, {
         organisationId,
@@ -211,6 +271,16 @@ export class SpacesService {
         entityId: space.id,
         title: `${space.name} created`,
       });
+
+      // Any OTHER mutation that shifts an ACTIVE scheme's allocated UOE
+      // out of reconciliation without adding new capacity (e.g. this
+      // space reclassified away from Common Property, moving existing
+      // capacity around) is a warning signal, never a block — see
+      // strata.service.ts's doc comment. New capacity itself was already
+      // hard-gated above.
+      if (touchesStrataFields(input)) {
+        await checkStrataReconciliationDrift(tx, { organisationId, propertyId, actorUserId });
+      }
 
       return space;
     });
@@ -291,6 +361,11 @@ export class SpacesService {
           input.lotNumber ?? existing.lotNumber,
           input.entitlementValue ?? existing.entitlementValue,
         );
+        await this.assertLotNumberAvailable(
+          existing.propertyId,
+          input.lotNumber ?? existing.lotNumber,
+          spaceId,
+        );
       }
     }
 
@@ -305,15 +380,39 @@ export class SpacesService {
       }
     }
 
+    // Only a space genuinely becoming a lot for the first time (not one
+    // already LOT having its UOE corrected — that stays unconditionally
+    // allowed, see assertNewAllocationFits' doc comment) consumes new
+    // capacity.
+    const becomingNewLot = classification === 'LOT' && existing.strataClassification !== 'LOT';
+
     return this.prisma.$transaction(async (tx) => {
-      const space = await tx.space.update({
-        where: { id: spaceId },
-        data: {
-          ...input,
-          strataClassification: classification,
-          isStrataLot: classification === 'LOT',
-        },
-      });
+      if (becomingNewLot) {
+        await assertNewAllocationFits(
+          tx,
+          existing.propertyId,
+          Number(input.entitlementValue ?? existing.entitlementValue ?? 0),
+        );
+      }
+
+      let space;
+      try {
+        space = await tx.space.update({
+          where: { id: spaceId },
+          data: {
+            ...input,
+            strataClassification: classification,
+            isStrataLot: classification === 'LOT',
+          },
+        });
+      } catch (err) {
+        if (isLotNumberConflict(err)) {
+          throw new ConflictError(
+            `Lot number "${input.lotNumber ?? existing.lotNumber}" is already used by another space on this property`,
+          );
+        }
+        throw err;
+      }
 
       await recordActivity(tx, {
         organisationId,
@@ -326,6 +425,14 @@ export class SpacesService {
         title: `${space.name} updated`,
         description: `Updated: ${Object.keys(input).join(', ')}`,
       });
+
+      if (touchesStrataFields(input)) {
+        await checkStrataReconciliationDrift(tx, {
+          organisationId,
+          propertyId: space.propertyId,
+          actorUserId,
+        });
+      }
 
       return space;
     });

@@ -46,8 +46,12 @@ describe('withPublicReference', () => {
       attempt++;
       seenRefs.push(ref);
       if (attempt < 3) {
-        const err = new Error('Unique constraint failed') as Error & { code: string };
+        const err = new Error('Unique constraint failed') as Error & {
+          code: string;
+          meta: { target: string };
+        };
         err.code = 'P2002';
+        err.meta = { target: 'publicReference' };
         throw err;
       }
       return { id: 'row_1', publicReference: ref };
@@ -71,12 +75,33 @@ describe('withPublicReference', () => {
 
   it('gives up after maxAttempts consecutive collisions, never retrying forever', async () => {
     const persist = vi.fn(async () => {
-      const err = new Error('Unique constraint failed') as Error & { code: string };
+      const err = new Error('Unique constraint failed') as Error & {
+        code: string;
+        meta: { target: string };
+      };
       err.code = 'P2002';
+      err.meta = { target: 'publicReference' };
       throw err;
     });
     await expect(withPublicReference('MR', persist, 3)).rejects.toThrow();
     expect(persist).toHaveBeenCalledTimes(3);
+  });
+
+  it('never retries a P2002 on a DIFFERENT unique constraint (e.g. a lot number collision) — regenerating the publicReference can never fix that, and retrying the same persist call again inside an open transaction would only mask the real error', async () => {
+    const persist = vi.fn(async () => {
+      const err = new Error('Unique constraint failed') as Error & {
+        code: string;
+        meta: { target: string };
+      };
+      err.code = 'P2002';
+      err.meta = { target: 'spaces_propertyId_lotNumber_key' };
+      throw err;
+    });
+    await expect(withPublicReference('LOT', persist, 5)).rejects.toMatchObject({
+      code: 'P2002',
+      meta: { target: 'spaces_propertyId_lotNumber_key' },
+    });
+    expect(persist).toHaveBeenCalledTimes(1); // never retried
   });
 });
 

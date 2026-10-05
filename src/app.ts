@@ -13,6 +13,20 @@ import { getOpenApiDocument } from './openapi/index.js';
 export function createApp() {
   const app = express();
 
+  // Trust exactly ONE hop of reverse proxy — correct for this platform's
+  // deployment topology (a single edge/load balancer in front of the app,
+  // e.g. Render), and deliberately NOT `true`/a blind boolean: that would
+  // trust an arbitrarily long, client-controlled X-Forwarded-For chain,
+  // letting any direct caller spoof req.ip by just sending their own
+  // X-Forwarded-For header — exactly what IP-based rate limiting (see
+  // middlewares/authRateLimit.ts) depends on NOT being spoofable. Only set
+  // outside local development/test, where there IS no real proxy in front
+  // — setting this locally would have the opposite effect, trusting a
+  // spoofable header instead of the real socket address.
+  if (env.NODE_ENV === 'production') {
+    app.set('trust proxy', 1);
+  }
+
   // FRONTEND_URL is comma-separated so staging can allow both a deployed
   // frontend and a local dev one (or any other legitimate origin) without
   // wildcarding — a request from anything else is still rejected.

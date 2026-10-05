@@ -76,19 +76,6 @@ export class QuoteRoundsService {
       throw new NotFoundError('Maintenance request not found');
     }
 
-    const existingRound = await this.prisma.quoteRound.findFirst({
-      where: { maintenanceRequestId: request.id, status: { in: ['DRAFT', 'OPEN'] } },
-    });
-    if (existingRound) {
-      throw new ConflictError('This maintenance request already has an active quote round');
-    }
-    const existingWorkOrder = await this.prisma.workOrder.findFirst({
-      where: { maintenanceRequestId: request.id, status: { not: 'CANCELLED' } },
-    });
-    if (existingWorkOrder) {
-      throw new ConflictError('This maintenance request already has a work order');
-    }
-
     const currencyCode =
       input.currencyCode ??
       (
@@ -99,6 +86,28 @@ export class QuoteRoundsService {
       ).currencyCode;
 
     const round = await this.prisma.$transaction(async (tx) => {
+      // Lock the MaintenanceRequest row for the rest of this transaction
+      // before re-checking either conflict condition below — the exact
+      // same lock WorkOrdersService.create() takes on the same row, so
+      // Postgres serialises any two concurrent create() calls (from
+      // either service) for this maintenance request rather than letting
+      // both pass a pre-transaction existence check against not-yet-
+      // committed state and both succeed.
+      await tx.$queryRaw`SELECT id FROM maintenance_requests WHERE id = ${request.id} FOR UPDATE`;
+
+      const existingRound = await tx.quoteRound.findFirst({
+        where: { maintenanceRequestId: request.id, status: { in: ['DRAFT', 'OPEN'] } },
+      });
+      if (existingRound) {
+        throw new ConflictError('This maintenance request already has an active quote round');
+      }
+      const existingWorkOrder = await tx.workOrder.findFirst({
+        where: { maintenanceRequestId: request.id, status: { not: 'CANCELLED' } },
+      });
+      if (existingWorkOrder) {
+        throw new ConflictError('This maintenance request already has a work order');
+      }
+
       const created = await withPublicReference('RFQ', (publicReference) =>
         tx.quoteRound.create({
           data: {

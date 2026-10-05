@@ -77,6 +77,18 @@ const envSchema = z.object({
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().default('Wasl Property <no-reply@waslproperty.dev>'),
 
+  // --- Communications delivery (M9) ---
+  // A communication stuck in SENDING past this long (process crashed or
+  // restarted mid-delivery, between claiming it and reaching the final
+  // SENT/FAILED write — no durable job queue exists here, same
+  // documented limitation as Property Document Intelligence's "stuck
+  // analysis" recovery) is reclaimed and retried from scratch the next
+  // time the scheduler polls, rather than staying stuck forever. Safe to
+  // retry: every write deliverOne makes (recipient/delivery rows,
+  // per-channel sends) is already idempotent/status-guarded for exactly
+  // this resume case — see CommunicationDeliveryService's doc comments.
+  COMMUNICATION_SENDING_STUCK_THRESHOLD_MS: z.coerce.number().default(300000),
+
   // --- WaslSign integration (M9-A) ---
   // Optional: an environment with none of these set simply can't offer
   // SIGNATURE_ONLY / APPROVAL_THEN_SIGNATURE — WaslSignService treats that
@@ -220,7 +232,77 @@ const envSchema = z.object({
   DOCUMENT_ANALYSIS_VISION_MAX_RETRIES: z.coerce.number().default(1),
 });
 
-const parsed = envSchema.safeParse(process.env);
+// Literal values .env.example ships as placeholders — must never reach any
+// environment that isn't a human's own local checkout. Checked outside
+// 'development' (so 'test' is covered too, though CI never uses these).
+const KNOWN_PLACEHOLDER_JWT_SECRETS = new Set(['change_me_access', 'change_me_refresh']);
+// Deliberately only enforced for NODE_ENV === 'production' (which is also
+// what this platform's staging deployments run under — there's no
+// separate 'staging' NODE_ENV value): test fixtures intentionally use
+// short, fixed secrets for determinism, and that's fine since nothing
+// about a local/CI test run is reachable by anyone else.
+const MIN_PRODUCTION_SECRET_LENGTH = 32;
+
+// Exported so tests can exercise the exact validation logic (placeholder
+// rejection, minimum secret length, cookie security) with arbitrary mock
+// input, without ever calling safeParse(process.env) themselves — doing
+// that directly would risk the process.exit(1) below on a deliberately
+// invalid test case.
+export const envValidationSchema = envSchema.superRefine((data, ctx) => {
+  const jwtSecretFields = [
+    ['JWT_ACCESS_SECRET', data.JWT_ACCESS_SECRET],
+    ['JWT_REFRESH_SECRET', data.JWT_REFRESH_SECRET],
+  ] as const;
+
+  if (data.NODE_ENV !== 'development') {
+    for (const [field, value] of jwtSecretFields) {
+      if (KNOWN_PLACEHOLDER_JWT_SECRETS.has(value)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `${field} is still the .env.example placeholder value — set a real secret before running outside local development`,
+        });
+      }
+    }
+  }
+
+  if (data.NODE_ENV === 'production') {
+    for (const [field, value] of jwtSecretFields) {
+      if (value.length < MIN_PRODUCTION_SECRET_LENGTH) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `${field} must be at least ${MIN_PRODUCTION_SECRET_LENGTH} characters in production (got ${value.length})`,
+        });
+      }
+    }
+    if (data.COOKIE_SECURE !== true) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['COOKIE_SECURE'],
+        message:
+          'COOKIE_SECURE must be true in production — refresh/platform cookies must never be sent over plain HTTP',
+      });
+    }
+  }
+
+  // Independent of NODE_ENV: browsers reject a SameSite=None cookie that
+  // isn't also Secure outright, so this combination is never valid,
+  // staging/cross-origin deployments included (they still need
+  // COOKIE_SECURE=true alongside COOKIE_SAME_SITE=none — this check
+  // doesn't add a new requirement, it just fails fast instead of silently
+  // shipping a cookie no browser will ever accept).
+  if (data.COOKIE_SAME_SITE === 'none' && data.COOKIE_SECURE !== true) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['COOKIE_SAME_SITE'],
+      message:
+        'COOKIE_SAME_SITE=none requires COOKIE_SECURE=true — browsers reject None without Secure',
+    });
+  }
+});
+
+const parsed = envValidationSchema.safeParse(process.env);
 
 if (!parsed.success) {
   console.error('Invalid environment configuration:', parsed.error.flatten().fieldErrors);

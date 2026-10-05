@@ -37,6 +37,14 @@ export const updateDraftSchema = z.object({
   state: z.string().trim().max(120).nullable().optional(),
   postalCode: z.string().trim().max(20).nullable().optional(),
   propertyType: z.enum(['RESIDENTIAL', 'COMMERCIAL', 'MIXED_USE']).optional(),
+  // Editable for the same reason propertyName/code are: the AI
+  // extraction can miss it, and completeSetup() (the manual onboarding
+  // path's equivalent gate) requires a plan number before a scheme may
+  // become ACTIVE — see validateDraft's STRATA_PLAN_NUMBER_REQUIRED
+  // check, which enforces the identical invariant here. Without this
+  // field being editable, a failed extraction would leave the document
+  // permanently unconfirmable.
+  strataPlanNumber: z.string().trim().min(1).max(40).nullable().optional(),
   strataSchemeName: z.string().trim().max(160).nullable().optional(),
   strataPlanDeclaredUnitsOfEntitlement: z.coerce.number().positive().nullable().optional(),
   lots: z
@@ -95,6 +103,7 @@ export function applyDraftUpdate(
     ...(input.state !== undefined && { state: input.state }),
     ...(input.postalCode !== undefined && { postalCode: input.postalCode }),
     ...(input.propertyType !== undefined && { propertyType: input.propertyType }),
+    ...(input.strataPlanNumber !== undefined && { strataPlanNumber: input.strataPlanNumber }),
     ...(input.strataSchemeName !== undefined && { strataSchemeName: input.strataSchemeName }),
     ...(input.strataPlanDeclaredUnitsOfEntitlement !== undefined && {
       strataPlanDeclaredUnitsOfEntitlement: input.strataPlanDeclaredUnitsOfEntitlement,
@@ -131,6 +140,17 @@ export function validateDraft(draft: StrataPlanDraft): DraftValidationResult {
       severity: 'BLOCKING',
       code: 'PROPERTY_CODE_REQUIRED',
       message: 'Enter a property code.',
+    });
+  }
+  // The same invariant StrataService.completeSetup() enforces for the
+  // manual onboarding path ("Record a strata plan number before
+  // completing setup") — a property can only ever become ACTIVE through
+  // one of these two paths, and both must require the same fundamentals.
+  if (!draft.strataPlanNumber?.trim()) {
+    issues.push({
+      severity: 'BLOCKING',
+      code: 'STRATA_PLAN_NUMBER_REQUIRED',
+      message: 'Enter the strata plan number.',
     });
   }
   if (!draft.addressLine1?.trim()) {

@@ -390,12 +390,36 @@ export class QuotesService {
     }
 
     if (input.workflowMode === 'NONE') {
-      // Nothing to review or sign — confirming NONE is itself the
-      // decision, so this quote is immediately as final as APPROVAL_ONLY's
-      // approve() leaves one, not left in an in-progress review state.
+      // Selecting "no approval or signature required" is itself an
+      // approval decision — it immediately satisfies the Approval &
+      // Acceptance gate a work order's release checks (deriveWorkflowResult
+      // treats workflowMode NONE as NOT_REQUIRED regardless of this
+      // quote's `status`). It is therefore never a plain configuration
+      // choice a quotes.manage-only actor can make unilaterally: it is
+      // only ever safe when the organisation's own policy has ALREADY
+      // established NONE as the floor for this amount (requiredWorkflowMode
+      // === 'NONE', set automatically at create/award time) — confirming
+      // that here grants no authority beyond what the policy itself
+      // already decided. When no policy is configured, or the quote's
+      // currency doesn't match the policy's (requiredWorkflowMode is
+      // null), there is no established floor at all, and this must never
+      // be used as a silent "no approval needed" escape hatch — the
+      // manager must choose an explicit workflow instead (mirrors the
+      // same principle work-orders.service.ts's READY gate already
+      // enforces: an unconfigured/mismatched policy must never be
+      // indistinguishable from "no approval required").
+      if (quote.requiredWorkflowMode !== 'NONE') {
+        throw new ConflictError(
+          "Cannot select \"no approval or signature required\" — the organisation's Approval & Acceptance policy has not established that for this amount (no policy is configured, or this quote's currency does not match the policy's). Choose an explicit workflow.",
+        );
+      }
+      // Recording the confirmation alone still never finalises the quote
+      // — only approve() (gated by quotes.approve) does that, exactly
+      // like WorkOrderVariationsService.setWorkflowMode, which also never
+      // touches `status`.
       return this.prisma.contractorQuote.update({
         where: { id: quoteId },
-        data: { workflowMode: 'NONE', status: 'APPROVED' },
+        data: { workflowMode: 'NONE' },
         include: quoteInclude,
       });
     }
@@ -422,10 +446,77 @@ export class QuotesService {
   async approve(organisationId: string, actorUserId: string, quoteId: string) {
     const quote = await this.getOwnedQuote(organisationId, quoteId);
     assertAwarded(quote);
-    if (
-      quote.workflowMode !== 'APPROVAL_ONLY' &&
-      quote.workflowMode !== 'APPROVAL_THEN_SIGNATURE'
-    ) {
+
+    // A workflowMode of NONE may already be sitting on this quote — either
+    // pre-resolved by policy at creation/award time, or confirmed via
+    // setWorkflowMode once policy itself established NONE as the floor
+    // (setWorkflowMode never lets a manager invent NONE when no floor
+    // exists — see its own doc comment). Either way, NONE alone never
+    // finalises a quote: this action, gated by quotes.approve, remains the
+    // only place `status` actually becomes APPROVED — mirrors
+    // WorkOrderVariationsService.approve exactly. A quote with no
+    // workflowMode confirmed at all only defaults to NONE here when the
+    // policy itself resolved NONE as the requirement — never silently,
+    // and never when no policy/currency-mismatch left requiredWorkflowMode
+    // null, which always forces an explicit setWorkflowMode call first.
+    let workflowMode = quote.workflowMode;
+    if (!workflowMode) {
+      if (quote.requiredWorkflowMode !== 'NONE') {
+        throw new ConflictError(
+          'Confirm the required Approval & Acceptance workflow for this quote before approving it.',
+        );
+      }
+      workflowMode = 'NONE';
+    }
+
+    if (workflowMode === 'NONE') {
+      if (quote.status === 'APPROVED' || quote.status === 'REJECTED') {
+        throw new ConflictError(`Cannot approve a quote already ${quote.status.toLowerCase()}`);
+      }
+      const approvedNone = await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.contractorQuote.update({
+          where: { id: quoteId },
+          data: {
+            workflowMode: 'NONE',
+            status: 'APPROVED',
+            approvedByUserId: actorUserId,
+            approvedAt: new Date(),
+          },
+          include: quoteInclude,
+        });
+
+        await recordActivity(tx, {
+          organisationId,
+          propertyId: quote.workOrder.property.id,
+          spaceId: quote.workOrder.space?.id ?? null,
+          actorUserId,
+          eventType: 'QUOTE_APPROVED',
+          entityType: 'WorkOrder',
+          entityId: quote.workOrder.id,
+          title: `Quote approved: ${quote.workOrder.title}`,
+          description: `${quote.amount} ${quote.currencyCode} · ${quote.contractor.name}`,
+        });
+
+        await notifyOrgStaff(
+          tx,
+          organisationId,
+          {
+            title: `Quote approved for ${quote.workOrder.title}`,
+            body: quote.contractor.name,
+            entityType: 'WorkOrder',
+            entityId: quote.workOrder.id,
+          },
+          { excludeUserId: actorUserId },
+        );
+
+        return updated;
+      });
+
+      await this.maybeReleaseWorkOrder(organisationId, quote.workOrder.id, actorUserId);
+      return approvedNone;
+    }
+
+    if (workflowMode !== 'APPROVAL_ONLY' && workflowMode !== 'APPROVAL_THEN_SIGNATURE') {
       throw new ConflictError('This quote does not require approval');
     }
     if (quote.approvalStatus !== 'PENDING') {
@@ -441,7 +532,7 @@ export class QuotesService {
           approvalStatus: 'APPROVED',
           approvedByUserId: actorUserId,
           approvedAt: new Date(),
-          status: quote.workflowMode === 'APPROVAL_ONLY' ? 'APPROVED' : 'UNDER_REVIEW',
+          status: workflowMode === 'APPROVAL_ONLY' ? 'APPROVED' : 'UNDER_REVIEW',
         },
         include: quoteInclude,
       });
@@ -473,7 +564,7 @@ export class QuotesService {
       return updated;
     });
 
-    if (quote.workflowMode === 'APPROVAL_ONLY') {
+    if (workflowMode === 'APPROVAL_ONLY') {
       await this.maybeReleaseWorkOrder(organisationId, quote.workOrder.id, actorUserId);
       return approved;
     }

@@ -4,7 +4,7 @@ import { createApp } from '../../src/app.js';
 import { CommunicationDeliveryService } from '../../src/modules/communications/communications.delivery.js';
 import { signAccessToken } from '../../src/lib/tokens.js';
 import { resetDb, testPrisma } from '../helpers/db.js';
-import { authHeader, registerTestUser } from '../helpers/auth.js';
+import { authHeader, registerTestUser, residentAccessToken } from '../helpers/auth.js';
 
 const { sendMock } = vi.hoisted(() => ({
   sendMock: vi.fn().mockResolvedValue({ providerMessageId: 'test-provider-message-id' }),
@@ -633,6 +633,187 @@ describe('communications', () => {
         where: { communicationRecipient: { communicationId }, channel: 'EMAIL' },
       });
       expect(retriedDelivery?.status).toBe('SENT');
+    });
+  });
+
+  describe('bounded delivery concurrency and stale-SENDING recovery', () => {
+    it('never sends more than a bounded number of recipient emails concurrently, even for a large audience', async () => {
+      const { accessToken } = await registerTestUser(app);
+      const { propertyId } = await setupPropertyWithTenant(accessToken);
+
+      // Add 11 more tenants to the same property (12 total) — enough to
+      // prove a concurrency bound without making the test slow.
+      for (let i = 0; i < 11; i++) {
+        const spaceRes = await request(app)
+          .post(`/api/v1/properties/${propertyId}/spaces`)
+          .set(authHeader(accessToken))
+          .send({ name: `Apartment ${900 + i}`, code: `${900 + i}`, spaceType: 'APARTMENT' });
+        await request(app)
+          .post(`/api/v1/properties/${propertyId}/memberships`)
+          .set(authHeader(accessToken))
+          .send({
+            email: `tenant${i}+${Date.now()}@example.com`,
+            firstName: 'T',
+            lastName: `${i}`,
+            role: 'TENANT',
+            spaceId: spaceRes.body.id,
+          });
+      }
+
+      let active = 0;
+      let maxActive = 0;
+      sendMock.mockImplementation(async () => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        active--;
+        return { providerMessageId: `msg-${Math.random()}` };
+      });
+
+      const created = await request(app)
+        .post('/api/v1/communications')
+        .set(authHeader(accessToken))
+        .send({
+          title: 'Fire drill notice',
+          body: 'Mandatory fire drill this Friday at 10am.',
+          channels: ['EMAIL'],
+          audienceCriteria: { scope: 'PROPERTY', propertyIds: [propertyId], roles: ['TENANT'] },
+        });
+      await request(app)
+        .post(`/api/v1/communications/${created.body.id}/send`)
+        .set(authHeader(accessToken))
+        .send({});
+
+      const { processed } = await deliveryService.processDue(new Date(Date.now() + 60_000));
+      expect(processed).toBe(1);
+      expect(sendMock).toHaveBeenCalledTimes(12);
+      // The actual bound this test exists to prove: never all 12 at once.
+      expect(maxActive).toBeLessThanOrEqual(5);
+      expect(maxActive).toBeGreaterThan(1); // and genuinely concurrent, not serialised to 1
+
+      const sentCount = await testPrisma.communicationDelivery.count({
+        where: { communicationRecipient: { communicationId: created.body.id }, status: 'SENT' },
+      });
+      expect(sentCount).toBe(12);
+    });
+
+    it('reclaims a communication stuck in SENDING past the threshold and successfully retries it to completion', async () => {
+      const { accessToken } = await registerTestUser(app);
+      await setupPropertyWithTenant(accessToken);
+
+      const created = await request(app)
+        .post('/api/v1/communications')
+        .set(authHeader(accessToken))
+        .send({
+          title: 'Stuck notice',
+          body: 'This delivery will simulate a crashed worker.',
+          channels: ['IN_APP'],
+          audienceCriteria: { scope: 'ORGANISATION' },
+        });
+      const communicationId = created.body.id as string;
+
+      // Simulate a worker that claimed this (SCHEDULED -> SENDING) and
+      // then crashed before deliverOne ever reached SENT/FAILED — stuck
+      // long enough to be past the default 5-minute threshold.
+      await testPrisma.communication.update({
+        where: { id: communicationId },
+        data: {
+          status: 'SENDING',
+          scheduledAt: new Date(Date.now() - 10 * 60_000),
+          updatedAt: new Date(Date.now() - 10 * 60_000),
+        },
+      });
+
+      const { processed } = await deliveryService.processDue(new Date());
+      expect(processed).toBe(1);
+
+      const final = await testPrisma.communication.findUnique({ where: { id: communicationId } });
+      expect(final?.status).toBe('SENT');
+    });
+
+    it('never reclaims a communication that is only briefly in SENDING (well under the threshold) — no false-positive double-processing', async () => {
+      const { accessToken } = await registerTestUser(app);
+      await setupPropertyWithTenant(accessToken);
+
+      const created = await request(app)
+        .post('/api/v1/communications')
+        .set(authHeader(accessToken))
+        .send({
+          title: 'Fresh in-flight notice',
+          body: 'This one is genuinely still being processed.',
+          channels: ['IN_APP'],
+          audienceCriteria: { scope: 'ORGANISATION' },
+        });
+      const communicationId = created.body.id as string;
+
+      // Claimed moments ago — a live, legitimate in-flight delivery, not
+      // a crash.
+      await testPrisma.communication.update({
+        where: { id: communicationId },
+        data: { status: 'SENDING', scheduledAt: new Date(Date.now() - 1000) },
+      });
+
+      const { processed } = await deliveryService.processDue(new Date());
+      expect(processed).toBe(0);
+
+      const stillSending = await testPrisma.communication.findUnique({
+        where: { id: communicationId },
+      });
+      expect(stillSending?.status).toBe('SENDING');
+    });
+  });
+
+  describe('SPACE-scope audience authorization is tenant-scoped', () => {
+    it("assertAudienceWithinScope itself rejects a SPACE-scope criteria referencing another organisation's space, not just the separate validate() existence check", async () => {
+      const orgA = await registerTestUser(app);
+      const { propertyId: propertyAId } = await setupPropertyWithTenant(orgA.accessToken);
+      const addManagerRes = await request(app)
+        .post(`/api/v1/properties/${propertyAId}/memberships`)
+        .set(authHeader(orgA.accessToken))
+        .send({ email: 'pm@example.com', firstName: 'P', lastName: 'M', role: 'PROPERTY_MANAGER' });
+      const managerToken = residentAccessToken(
+        addManagerRes.body.contact.userId ?? addManagerRes.body.contactId,
+        orgA.organisationId,
+        addManagerRes.body.contactId,
+      );
+
+      // A completely unrelated org/property/space.
+      const orgB = await registerTestUser(app);
+      const { spaceId: foreignSpaceId } = await setupPropertyWithTenant(orgB.accessToken);
+
+      // Seeded directly (bypassing the create() route, which would
+      // itself reject this via audience.validate()'s org-scoped existence
+      // check before ever reaching assertAudienceWithinScope) — this
+      // simulates a communication whose audienceCriteria already
+      // reference a space that has since moved to another org, or simply
+      // pre-existing data, so that the PATCH below exercises ONLY
+      // assertAudienceWithinScope's own tenant check, independent of
+      // validate().
+      const seeded = await testPrisma.communication.create({
+        data: {
+          organisationId: orgA.organisationId,
+          publicReference: `COM-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+          title: 'Pre-existing draft',
+          body: 'Body',
+          status: 'DRAFT',
+          channels: ['IN_APP'],
+          audienceCriteria: { scope: 'SPACE', spaceIds: [foreignSpaceId] },
+          createdByUserId: orgA.userId,
+        },
+      });
+
+      // Editing it WITHOUT touching audienceCriteria goes straight to
+      // assertAudienceWithinScope against the stored criteria — no
+      // validate() call on this path at all (see CommunicationsService
+      // .update()).
+      const res = await request(app)
+        .patch(`/api/v1/communications/${seeded.id}`)
+        .set(authHeader(managerToken))
+        .send({ title: 'Renamed' });
+
+      expect(res.status).toBe(403);
+      const unchanged = await testPrisma.communication.findUnique({ where: { id: seeded.id } });
+      expect(unchanged?.title).toBe('Pre-existing draft');
     });
   });
 });

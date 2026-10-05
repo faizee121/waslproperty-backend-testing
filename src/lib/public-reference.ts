@@ -38,12 +38,27 @@ export function buildPublicReference(prefix: string): string {
   return `${prefix}-${randomToken()}`;
 }
 
-function isUniqueConstraintViolation(err: unknown): boolean {
+/**
+ * Specifically the publicReference unique constraint — NOT any P2002.
+ * Checked via the constraint/index name Postgres reports in `meta.target`,
+ * never assumed just because the error code matches. This matters: `persist`
+ * may insert/update other unique-constrained columns too (e.g. a Space's
+ * `code`, or the new lotNumber partial index), and retrying with a freshly
+ * generated publicReference would never resolve a collision on a DIFFERENT
+ * column — it would just waste attempts, and when `persist` runs inside an
+ * open Prisma $transaction, retrying the same transaction client after ANY
+ * error leaves Postgres in an aborted-transaction state, so the retry's own
+ * error (25P02, "current transaction is aborted") would then overwrite and
+ * hide the real, original error entirely by the time maxAttempts is
+ * exhausted.
+ */
+function isPublicReferenceCollision(err: unknown): boolean {
   return (
     typeof err === 'object' &&
     err !== null &&
     'code' in err &&
-    (err as { code: unknown }).code === 'P2002'
+    (err as { code: unknown }).code === 'P2002' &&
+    String((err as { meta?: { target?: unknown } }).meta?.target ?? '').includes('publicReference')
   );
 }
 
@@ -69,7 +84,7 @@ export async function withPublicReference<T>(
     try {
       return await persist(buildPublicReference(prefix));
     } catch (err) {
-      if (isUniqueConstraintViolation(err) && attempt < maxAttempts) continue;
+      if (isPublicReferenceCollision(err) && attempt < maxAttempts) continue;
       throw err;
     }
   }

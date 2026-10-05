@@ -3,6 +3,7 @@ import { recordActivity } from '../activity/activity.js';
 import { emailService } from '../../lib/email.js';
 import { getPrismaClient } from '../../lib/prisma.js';
 import { logger } from '../../lib/logger.js';
+import { env } from '../../config/env.js';
 import { notifyUsers } from '../notifications/notifications.js';
 import {
   AudienceResolver,
@@ -10,6 +11,33 @@ import {
   type ResolvedRecipient,
 } from './communications.audience.js';
 import { renderAnnouncementEmail } from './communications.email.js';
+
+/** A large announcement audience (hundreds/thousands of residents) must
+ * never fire every recipient's email send at once — that's both a
+ * straightforward way to get the outbound mail provider to start
+ * throttling/blocking this account, and a spike of fully-concurrent DB
+ * round trips + provider API calls with nothing bounding it. Bounded to a
+ * small worker-pool instead; each recipient's own send/write is already
+ * independent and error-isolated (see sendEmails below), so this changes
+ * nothing about per-recipient delivery status or error handling — only
+ * how many run at once. */
+const EMAIL_SEND_CONCURRENCY = 5;
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      await fn(items[index]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+}
 
 /**
  * The processing side of communication delivery, deliberately behind this
@@ -44,8 +72,13 @@ export class CommunicationDeliveryService {
 
   /** Atomically claims up to `batchSize` due communications so a second
    * concurrent caller (e.g. a rolling deploy with two instances briefly
-   * overlapping) can never double-process the same one. */
+   * overlapping) can never double-process the same one. Also reclaims
+   * any communication stuck in SENDING past
+   * COMMUNICATION_SENDING_STUCK_THRESHOLD_MS — see that env var's doc
+   * comment for why retrying from scratch is safe. */
   async processDue(now = new Date(), batchSize = 10): Promise<{ processed: number }> {
+    await this.reclaimStuckSending(now);
+
     const due = await this.prisma.communication.findMany({
       where: { status: 'SCHEDULED', scheduledAt: { lte: now } },
       take: batchSize,
@@ -64,6 +97,29 @@ export class CommunicationDeliveryService {
       processed++;
     }
     return { processed };
+  }
+
+  /** A communication can only ever reach SENDING via the atomic claim
+   * above, and only ever leave it via deliverOne's own try/catch (SENT
+   * or FAILED) — so one still in SENDING after this long has no live
+   * process working on it; the process that claimed it crashed or was
+   * killed mid-delivery. Reclaiming it (SENDING -> SCHEDULED, so the
+   * normal claim loop above picks it straight back up) is safe only
+   * because deliverOne's own writes are idempotent/status-guarded for
+   * exactly this resume case; this does not introduce that guarantee,
+   * it relies on it. */
+  private async reclaimStuckSending(now: Date): Promise<void> {
+    const staleBefore = new Date(now.getTime() - env.COMMUNICATION_SENDING_STUCK_THRESHOLD_MS);
+    const reclaimed = await this.prisma.communication.updateMany({
+      where: { status: 'SENDING', updatedAt: { lt: staleBefore } },
+      data: { status: 'SCHEDULED' },
+    });
+    if (reclaimed.count > 0) {
+      logger.warn(
+        { count: reclaimed.count, staleBefore },
+        'Reclaimed communication(s) stuck in SENDING for retry',
+      );
+    }
   }
 
   async deliverOne(communicationId: string): Promise<void> {
@@ -199,73 +255,71 @@ export class CommunicationDeliveryService {
       select: { name: true },
     });
 
-    await Promise.allSettled(
-      recipients.map(async (recipient) => {
-        const recipientRow = await this.prisma.communicationRecipient.findUnique({
-          where: {
-            communicationId_contactId: {
-              communicationId: communication.id,
-              contactId: recipient.contactId,
-            },
+    await mapWithConcurrency(recipients, EMAIL_SEND_CONCURRENCY, async (recipient) => {
+      const recipientRow = await this.prisma.communicationRecipient.findUnique({
+        where: {
+          communicationId_contactId: {
+            communicationId: communication.id,
+            contactId: recipient.contactId,
+          },
+        },
+      });
+      if (!recipientRow) return;
+
+      const deliveryRow = await this.prisma.communicationDelivery.findUnique({
+        where: {
+          communicationRecipientId_channel: {
+            communicationRecipientId: recipientRow.id,
+            channel: 'EMAIL',
+          },
+        },
+      });
+      if (!deliveryRow) return;
+      // The actual duplicate-send guard: the external email call can't be
+      // made transactional with the DB write that records it, so if
+      // deliverOne is ever resumed/retried after this recipient's email
+      // already went out (status SENT or DELIVERED), never send it again.
+      // A PENDING or FAILED row is retried, matching existing behaviour.
+      if (deliveryRow.status === 'SENT' || deliveryRow.status === 'DELIVERED') return;
+
+      try {
+        const rendered = renderAnnouncementEmail({
+          title: communication.title,
+          body: communication.body,
+          organisationName: organisation?.name ?? 'Wasl Property',
+          recipientFirstName: recipient.firstName,
+        });
+        const { providerMessageId } = await emailService.send({
+          to: recipient.email,
+          subject: rendered.subject,
+          html: rendered.html,
+          text: rendered.text,
+        });
+        await this.prisma.communicationDelivery.update({
+          where: { id: deliveryRow.id },
+          data: {
+            status: 'SENT',
+            attemptedAt: new Date(),
+            sentAt: new Date(),
+            providerMessageId: providerMessageId ?? null,
           },
         });
-        if (!recipientRow) return;
-
-        const deliveryRow = await this.prisma.communicationDelivery.findUnique({
-          where: {
-            communicationRecipientId_channel: {
-              communicationRecipientId: recipientRow.id,
-              channel: 'EMAIL',
-            },
+      } catch (err) {
+        logger.error(
+          { err, communicationId: communication.id, contactId: recipient.contactId },
+          'Failed to send announcement email',
+        );
+        await this.prisma.communicationDelivery.update({
+          where: { id: deliveryRow.id },
+          data: {
+            status: 'FAILED',
+            attemptedAt: new Date(),
+            failedAt: new Date(),
+            failureReason: err instanceof Error ? err.message : String(err),
           },
         });
-        if (!deliveryRow) return;
-        // The actual duplicate-send guard: the external email call can't be
-        // made transactional with the DB write that records it, so if
-        // deliverOne is ever resumed/retried after this recipient's email
-        // already went out (status SENT or DELIVERED), never send it again.
-        // A PENDING or FAILED row is retried, matching existing behaviour.
-        if (deliveryRow.status === 'SENT' || deliveryRow.status === 'DELIVERED') return;
-
-        try {
-          const rendered = renderAnnouncementEmail({
-            title: communication.title,
-            body: communication.body,
-            organisationName: organisation?.name ?? 'Wasl Property',
-            recipientFirstName: recipient.firstName,
-          });
-          const { providerMessageId } = await emailService.send({
-            to: recipient.email,
-            subject: rendered.subject,
-            html: rendered.html,
-            text: rendered.text,
-          });
-          await this.prisma.communicationDelivery.update({
-            where: { id: deliveryRow.id },
-            data: {
-              status: 'SENT',
-              attemptedAt: new Date(),
-              sentAt: new Date(),
-              providerMessageId: providerMessageId ?? null,
-            },
-          });
-        } catch (err) {
-          logger.error(
-            { err, communicationId: communication.id, contactId: recipient.contactId },
-            'Failed to send announcement email',
-          );
-          await this.prisma.communicationDelivery.update({
-            where: { id: deliveryRow.id },
-            data: {
-              status: 'FAILED',
-              attemptedAt: new Date(),
-              failedAt: new Date(),
-              failureReason: err instanceof Error ? err.message : String(err),
-            },
-          });
-        }
-      }),
-    );
+      }
+    });
   }
 }
 

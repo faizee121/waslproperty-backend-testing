@@ -1,4 +1,5 @@
-import type { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
 import { recordActivity } from '../activity/activity.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '../../errors/AppError.js';
 import { env } from '../../config/env.js';
@@ -139,16 +140,33 @@ export class WorkOrderVariationsService {
 
     const approved = variations.filter((v) => v.status === 'APPROVED');
     const pending = variations.filter((v) => v.status === 'PENDING_APPROVAL');
-    const approvedTotal = approved.reduce((sum, v) => sum + Number(v.amountDelta), 0);
-    const pendingTotal = pending.reduce((sum, v) => sum + Number(v.amountDelta), 0);
-    const originalAmount = workOrder.estimatedCost != null ? Number(workOrder.estimatedCost) : 0;
+    // Summed as Prisma.Decimal (exact base-10 arithmetic, same engine the
+    // DB column itself uses), never plain JS numbers — this feeds
+    // WaslSign's legal/commercial variation documents, where a
+    // floating-point drift of even a single cent (e.g. 0.1 + 0.2 !==
+    // 0.3 in IEEE-754) is a real correctness defect, not cosmetic.
+    // Converted to Number only at the very end, to keep this endpoint's
+    // existing numeric response contract unchanged.
+    const approvedTotalDecimal = approved.reduce(
+      (sum, v) => sum.plus(v.amountDelta),
+      new Prisma.Decimal(0),
+    );
+    const pendingTotalDecimal = pending.reduce(
+      (sum, v) => sum.plus(v.amountDelta),
+      new Prisma.Decimal(0),
+    );
+    const originalAmountDecimal =
+      workOrder.estimatedCost != null
+        ? new Prisma.Decimal(workOrder.estimatedCost)
+        : new Prisma.Decimal(0);
+    const authorisedTotalDecimal = originalAmountDecimal.plus(approvedTotalDecimal);
 
     return {
       currencyCode: workOrder.currencyCode,
-      originalAmount,
-      approvedVariationsTotal: approvedTotal,
-      pendingVariationsTotal: pendingTotal,
-      authorisedTotal: originalAmount + approvedTotal,
+      originalAmount: originalAmountDecimal.toNumber(),
+      approvedVariationsTotal: approvedTotalDecimal.toNumber(),
+      pendingVariationsTotal: pendingTotalDecimal.toNumber(),
+      authorisedTotal: authorisedTotalDecimal.toNumber(),
       approvedVariationCount: approved.length,
       pendingVariationCount: pending.length,
     };

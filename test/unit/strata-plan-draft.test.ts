@@ -131,4 +131,30 @@ describe('validateDraft', () => {
     expect(updated.strataPlanNumber).toBe(draft.strataPlanNumber);
     expect(updated.lots).toEqual(draft.lots);
   });
+
+  it('blocks confirmation when the AI failed to extract a strata plan number — the same invariant StrataService.completeSetup() enforces for the manual onboarding path', () => {
+    let draft = seedDraftFromExtraction({
+      ...sampleExtraction,
+      plan: { ...sampleExtraction.plan, planNumber: field<string>(null, 'LOW') },
+    });
+    draft = applyDraftUpdate(draft, { propertyName: 'Oceanview', code: 'OCEANVIEW-1' });
+    expect(draft.strataPlanNumber).toBeNull();
+
+    const result = validateDraft(draft);
+    expect(result.canConfirm).toBe(false);
+    expect(result.issues.some((i) => i.code === 'STRATA_PLAN_NUMBER_REQUIRED')).toBe(true);
+  });
+
+  it('a missing strata plan number can be corrected via the draft, exactly like propertyName/code', () => {
+    let draft = seedDraftFromExtraction({
+      ...sampleExtraction,
+      plan: { ...sampleExtraction.plan, planNumber: field<string>(null, 'LOW') },
+    });
+    draft = applyDraftUpdate(draft, { propertyName: 'Oceanview', code: 'OCEANVIEW-1' });
+    expect(validateDraft(draft).canConfirm).toBe(false);
+
+    draft = applyDraftUpdate(draft, { strataPlanNumber: 'SP64555' });
+    expect(draft.strataPlanNumber).toBe('SP64555');
+    expect(validateDraft(draft).canConfirm).toBe(true);
+  });
 });

@@ -1,4 +1,5 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { Prisma } from '@prisma/client';
 
 export interface QuoteAcceptanceDocumentInput {
   organisationName: string;
@@ -239,10 +240,16 @@ export async function generateVariationAcceptanceDocument(
     }
   };
 
-  const originalAmount = Number(input.originalAmount);
   const approvedVariations = Number(input.previouslyApprovedVariationsTotal);
   const variationAmount = Number(input.variationAmount);
-  const proposedNewTotal = originalAmount + approvedVariations + variationAmount;
+  // Summed as Prisma.Decimal, not plain JS numbers — this total is printed
+  // verbatim into a legally-signed WaslSign document, so IEEE-754 drift
+  // (e.g. 0.1 + 0.2 !== 0.3) is never acceptable here even though it's
+  // rounded for display immediately after.
+  const proposedNewTotal = new Prisma.Decimal(input.originalAmount)
+    .plus(input.previouslyApprovedVariationsTotal)
+    .plus(input.variationAmount)
+    .toNumber();
 
   drawTitle('Work Order Variation — Acceptance');
   drawLabelValue('Organisation', input.organisationName);

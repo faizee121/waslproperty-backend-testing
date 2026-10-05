@@ -600,6 +600,40 @@ describe('work order variation Approval & Acceptance enforcement', () => {
       expect(summary.body.authorisedTotal).toBe(13500);
       expect(summary.body.pendingVariationsTotal).toBe(999);
     });
+
+    it('sums to the exact cent even where naive IEEE-754 float addition would drift', async () => {
+      // A known floating-point trap: 1000.10 + 1000.20 as plain JS numbers
+      // is 2000.3000000000002, not 2000.3 — this proves the summary (and,
+      // transitively, the WaslSign acceptance document it feeds) is
+      // computed via exact Decimal arithmetic, not plain `+`.
+      const { accessToken } = await registerTestUser(app);
+      await configurePolicy(accessToken, {
+        currencyCode: 'AUD',
+        enabled: true,
+        rules: [{ maxAmount: null, workflowMode: 'NONE' }],
+      });
+      const { workOrderId } = await setupAwardedWorkOrder(accessToken, 10000.1);
+
+      const v1 = await createVariation(accessToken, workOrderId, 1000.1);
+      await request(app)
+        .post(`/api/v1/work-order-variations/${v1.id}/approve`)
+        .set(authHeader(accessToken));
+      const v2 = await createVariation(accessToken, workOrderId, 1000.2);
+      await request(app)
+        .post(`/api/v1/work-order-variations/${v2.id}/approve`)
+        .set(authHeader(accessToken));
+
+      const summary = await request(app)
+        .get(`/api/v1/work-order-variations/work-order/${workOrderId}/commercial-summary`)
+        .set(authHeader(accessToken));
+
+      expect(summary.body.approvedVariationsTotal).toBe(2000.3);
+      expect(summary.body.originalAmount).toBe(10000.1);
+      expect(summary.body.authorisedTotal).toBe(12000.4);
+      // The naive-float bug this test guards against: confirm it would
+      // actually have failed the assertion above if un-fixed.
+      expect(1000.1 + 1000.2).not.toBe(2000.3);
+    });
   });
 
   describe('security', () => {

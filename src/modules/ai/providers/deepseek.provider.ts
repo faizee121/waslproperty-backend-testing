@@ -5,6 +5,7 @@ import type {
   AiProviderMessage,
   AiProviderToolCall,
 } from './ai-provider.interface.js';
+import { AiProviderError } from './provider-error.js';
 
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 
@@ -74,33 +75,57 @@ export class DeepSeekAiProvider implements AiProvider {
     const timeout = setTimeout(() => controller.abort(), params.timeoutMs);
 
     try {
-      const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: this.model,
-          messages: toDeepSeekMessages(params.systemPrompt, params.messages),
-          tools:
-            params.tools.length > 0
-              ? params.tools.map((t) => ({
-                  type: 'function',
-                  function: { name: t.name, description: t.description, parameters: t.parameters },
-                }))
-              : undefined,
-          max_tokens: params.maxOutputTokens,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        throw new Error(`DeepSeek API error ${response.status}: ${body.slice(0, 500)}`);
+      let response: Response;
+      try {
+        response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: this.model,
+            messages: toDeepSeekMessages(params.systemPrompt, params.messages),
+            tools:
+              params.tools.length > 0
+                ? params.tools.map((t) => ({
+                    type: 'function',
+                    function: {
+                      name: t.name,
+                      description: t.description,
+                      parameters: t.parameters,
+                    },
+                  }))
+                : undefined,
+            max_tokens: params.maxOutputTokens,
+          }),
+          signal: controller.signal,
+        });
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          throw new AiProviderError(
+            'TIMEOUT',
+            `DeepSeek API request timed out after ${params.timeoutMs}ms`,
+          );
+        }
+        throw new AiProviderError(
+          'NETWORK_ERROR',
+          'DeepSeek API request failed before receiving a response',
+        );
       }
 
-      const data = (await response.json()) as {
+      if (!response.ok) {
+        // Drain the body so the connection can be released, but never
+        // surface it — see provider-error.ts's doc comment on why.
+        await response.text().catch(() => '');
+        throw new AiProviderError(
+          response.status === 401 || response.status === 403 ? 'AUTH_ERROR' : 'HTTP_ERROR',
+          `DeepSeek API responded with status ${response.status}`,
+          response.status,
+        );
+      }
+
+      let data: {
         choices: Array<{
           message: {
             content: string | null;
@@ -110,9 +135,19 @@ export class DeepSeekAiProvider implements AiProvider {
         }>;
         usage?: { prompt_tokens: number; completion_tokens: number };
       };
+      try {
+        data = (await response.json()) as typeof data;
+      } catch {
+        throw new AiProviderError(
+          'MALFORMED_RESPONSE',
+          'DeepSeek API returned a response that was not valid JSON',
+        );
+      }
 
       const choice = data.choices[0];
-      if (!choice) throw new Error('DeepSeek API returned no choices');
+      if (!choice) {
+        throw new AiProviderError('MALFORMED_RESPONSE', 'DeepSeek API returned no choices');
+      }
 
       return {
         message: {

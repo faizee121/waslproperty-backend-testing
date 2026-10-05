@@ -343,10 +343,19 @@ describe("Public References — backfill idempotency (verified against this run'
 
     // The backfill script only ever acts on publicReference IS NULL rows —
     // with NOT NULL enforced at the database level, there are none left to
-    // find, so simulate its exact query here and assert it's a no-op.
-    const missing = await testPrisma.property.findMany({
-      where: { id: property.id, publicReference: null },
-    });
+    // find, so simulate its exact intent here and assert it's a no-op. Raw
+    // SQL, not Prisma's ORM filter: `publicReference` is a NOT NULL column
+    // in the current schema, so Prisma's own generated client rejects an
+    // `{ equals/IS }: null` filter on it at the argument-validation layer
+    // before a query is even built — the backfill script's identical
+    // `prisma.property.findMany({ where: { publicReference: null } })`
+    // pattern is itself now unreachable dead code for exactly this reason
+    // (see prisma/backfill-public-references.ts; tracked as technical
+    // debt, out of scope here since it's a standalone operator script with
+    // no runtime/test path and is already a permanent no-op by construction).
+    const missing = await testPrisma.$queryRaw<{ id: string }[]>`
+      SELECT id FROM properties WHERE id = ${property.id} AND "publicReference" IS NULL
+    `;
     expect(missing).toHaveLength(0);
 
     const after = await testPrisma.property.findUniqueOrThrow({ where: { id: property.id } });

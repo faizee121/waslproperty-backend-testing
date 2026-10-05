@@ -34,6 +34,18 @@ vi.mock(
   },
 );
 
+// A pass-through spy by default (delegates to the real write) — only the
+// mid-transaction-failure test below overrides it to reject once, to force
+// a failure partway through confirm()'s real $transaction without ever
+// touching Prisma's own `$transaction` internals directly (same documented-
+// safe pattern as communications.test.ts's recordActivityMock).
+const { recordActivityMock } = vi.hoisted(() => ({
+  recordActivityMock: vi.fn(),
+}));
+vi.mock('../../src/modules/activity/activity.js', () => ({
+  recordActivity: recordActivityMock,
+}));
+
 import { createApp } from '../../src/app.js';
 import { resetDb, testPrisma } from '../helpers/db.js';
 import { authHeader, registerTestUser } from '../helpers/auth.js';
@@ -151,6 +163,11 @@ beforeEach(async () => {
   getObjectBytesMock.mockClear();
   extractMock.mockResolvedValue({ pageCount: 4, pages: SAMPLE_PAGES, engine: 'mock-ocr' });
   interpretMock.mockResolvedValue(SAMPLE_RAW_INTERPRETATION);
+  recordActivityMock.mockReset();
+  recordActivityMock.mockImplementation(
+    async (client: { activityEvent: { create: (args: unknown) => unknown } }, input: unknown) =>
+      client.activityEvent.create({ data: input }),
+  );
 });
 
 afterEach(() => {
@@ -464,6 +481,136 @@ describe('Property Document Intelligence — security & idempotency', () => {
       where: { organisationId: owner.organisationId },
     });
     expect(propertyCount).toBe(1);
+  });
+
+  it('requires a strata plan number before confirming — the same invariant completeSetup() enforces on the manual onboarding path — and it can be corrected via the draft', async () => {
+    interpretMock.mockResolvedValue({
+      ...SAMPLE_RAW_INTERPRETATION,
+      planNumber: { value: null, pageNumber: null },
+    });
+    const owner = await registerAuOrg();
+    const documentId = await uploadDocument(owner.accessToken);
+    const settled = await waitForStatus(owner.accessToken, documentId, ['UPLOADED', 'ANALYSING']);
+    expect(settled.body.draft.strataPlanNumber).toBeNull();
+    expect(
+      settled.body.validation.issues.some(
+        (i: { code: string }) => i.code === 'STRATA_PLAN_NUMBER_REQUIRED',
+      ),
+    ).toBe(true);
+    expect(settled.body.validation.canConfirm).toBe(false);
+
+    await request(app)
+      .patch(`/api/v1/property-documents/${documentId}/draft`)
+      .set(authHeader(owner.accessToken))
+      .send({ propertyName: 'Oceanview', code: 'OCEANVIEW-1' });
+
+    const blockedConfirm = await request(app)
+      .post(`/api/v1/property-documents/${documentId}/confirm`)
+      .set(authHeader(owner.accessToken));
+    expect(blockedConfirm.status).toBe(409);
+
+    const fixed = await request(app)
+      .patch(`/api/v1/property-documents/${documentId}/draft`)
+      .set(authHeader(owner.accessToken))
+      .send({ strataPlanNumber: 'SP64555' });
+    expect(fixed.body.validation.canConfirm).toBe(true);
+
+    const confirm = await request(app)
+      .post(`/api/v1/property-documents/${documentId}/confirm`)
+      .set(authHeader(owner.accessToken));
+    expect(confirm.status).toBe(201);
+    expect(confirm.body.strataPlanNumber).toBe('SP64555');
+  });
+
+  it('two genuinely concurrent confirm() calls for the same document never create two properties and never surface a raw 500', async () => {
+    const owner = await registerAuOrg();
+    const documentId = await uploadDocument(owner.accessToken);
+    await waitForStatus(owner.accessToken, documentId, ['UPLOADED', 'ANALYSING']);
+    await request(app)
+      .patch(`/api/v1/property-documents/${documentId}/draft`)
+      .set(authHeader(owner.accessToken))
+      .send({ propertyName: 'Oceanview', code: 'SP64555' });
+
+    const send = () =>
+      request(app)
+        .post(`/api/v1/property-documents/${documentId}/confirm`)
+        .set(authHeader(owner.accessToken));
+
+    const [first, second] = await Promise.all([send(), send()]);
+
+    // Both calls resolve cleanly — either both as the same winning
+    // property (the idempotent race-recovery path), or the loser as a
+    // clean, deterministic conflict — but never an opaque 500.
+    expect([first.status, second.status]).not.toContain(500);
+    for (const res of [first, second]) {
+      expect([201, 409]).toContain(res.status);
+    }
+    const successes = [first, second].filter((r) => r.status === 201);
+    expect(successes.length).toBeGreaterThanOrEqual(1);
+    if (successes.length === 2) {
+      expect(successes[0]!.body.id).toBe(successes[1]!.body.id);
+    }
+
+    const properties = await testPrisma.property.findMany({
+      where: { organisationId: owner.organisationId },
+    });
+    expect(properties).toHaveLength(1);
+    const spaces = await testPrisma.space.findMany({ where: { propertyId: properties[0]!.id } });
+    expect(spaces).toHaveLength(7);
+
+    const refreshedDocument = await testPrisma.propertyDocument.findUniqueOrThrow({
+      where: { id: documentId },
+    });
+    expect(refreshedDocument.status).toBe('CONFIRMED');
+    expect(refreshedDocument.createdPropertyId).toBe(properties[0]!.id);
+  });
+
+  it('a mid-transaction failure during confirm() leaves zero partial state — no orphaned Property, no orphaned Spaces, and the document stays unconfirmed', async () => {
+    const owner = await registerAuOrg();
+    const documentId = await uploadDocument(owner.accessToken);
+    await waitForStatus(owner.accessToken, documentId, ['UPLOADED', 'ANALYSING']);
+    await request(app)
+      .patch(`/api/v1/property-documents/${documentId}/draft`)
+      .set(authHeader(owner.accessToken))
+      .send({ propertyName: 'Oceanview', code: 'SP64555' });
+
+    // Forces a failure AFTER the Property and all 7 Space rows have
+    // already been inserted inside confirm()'s single $transaction (the
+    // first of its three recordActivity calls, PROPERTY_CREATED, fires
+    // only after every Space is created — see
+    // PropertyDocumentsService.confirm) but BEFORE the transaction
+    // commits. If the transaction's atomicity actually holds, every one
+    // of those already-executed inserts must still be rolled back.
+    recordActivityMock.mockRejectedValueOnce(new Error('simulated transient DB error'));
+
+    const confirmRes = await request(app)
+      .post(`/api/v1/property-documents/${documentId}/confirm`)
+      .set(authHeader(owner.accessToken));
+    expect(confirmRes.status).toBeGreaterThanOrEqual(500);
+
+    const properties = await testPrisma.property.findMany({
+      where: { organisationId: owner.organisationId },
+    });
+    expect(properties).toHaveLength(0);
+
+    const spaces = await testPrisma.space.findMany({
+      where: { organisationId: owner.organisationId },
+    });
+    expect(spaces).toHaveLength(0);
+
+    const document = await testPrisma.propertyDocument.findUniqueOrThrow({
+      where: { id: documentId },
+    });
+    expect(document.status).not.toBe('CONFIRMED');
+    expect(document.createdPropertyId).toBeNull();
+
+    // And the failure is genuinely recoverable — a clean retry (with the
+    // transient error gone) succeeds normally, proving this isn't a
+    // document now stuck in a broken state.
+    const retryRes = await request(app)
+      .post(`/api/v1/property-documents/${documentId}/confirm`)
+      .set(authHeader(owner.accessToken));
+    expect(retryRes.status).toBe(201);
   });
 
   it('cannot be confirmed by a user lacking property.manage even within the same organisation', async () => {

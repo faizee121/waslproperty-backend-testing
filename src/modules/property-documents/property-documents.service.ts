@@ -22,6 +22,23 @@ import type {
 
 const MAX_ANALYSIS_ATTEMPTS = 3;
 
+/**
+ * Specifically a collision on Property's own (organisationId, code) unique
+ * constraint — the one that can genuinely fire when two confirm() calls
+ * for the SAME document race each other (see confirm()'s doc comment).
+ * Prisma reports a P2002 on a schema-declared @@unique as a field-name
+ * array in meta.target (confirmed empirically — unlike a hand-written
+ * raw-SQL index, see lib/public-reference.ts's isPublicReferenceCollision
+ * for that other shape), so this never mistakes an unrelated P2002 (e.g.
+ * on publicReference, which withPublicReference already owns) for this one.
+ */
+function isPropertyCodeConflict(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null || !('code' in err)) return false;
+  if ((err as { code: unknown }).code !== 'P2002') return false;
+  const target = (err as { meta?: { target?: unknown } }).meta?.target;
+  return Array.isArray(target) && target.includes('code');
+}
+
 function storageKeyPrefix(organisationId: string): string {
   return `organisations/${organisationId}/property-documents/`;
 }
@@ -235,95 +252,125 @@ export class PropertyDocumentsService {
       throw new ConflictError(`A property with code "${draft.code}" already exists`);
     }
 
-    const property = await this.prisma.$transaction(async (tx) => {
-      // Public reference generated here, the same trusted backend flow as
-      // every other creation path — never derived from the strata plan
-      // number, the confirmed name, the document id, or the organisation
-      // id (see M15.2 Public Reference spec Section 17).
-      const createdProperty = await withPublicReference('PROP', (publicReference) =>
-        tx.property.create({
-          data: {
-            organisationId,
-            publicReference,
-            name: draft.propertyName as string,
-            code: draft.code as string,
-            addressLine1: draft.addressLine1 ?? 'Not provided',
-            addressLine2: draft.addressLine2 ?? undefined,
-            city: draft.city ?? 'Not provided',
-            state: draft.state ?? undefined,
-            country: draft.country,
-            postalCode: draft.postalCode ?? undefined,
-            propertyType: draft.propertyType,
-            isStrataManaged: true,
-            strataStatus: 'ACTIVE',
-            strataPlanNumber: draft.strataPlanNumber ?? undefined,
-            strataSchemeName: draft.strataSchemeName ?? undefined,
-            strataPlanDeclaredUnitsOfEntitlement:
-              draft.strataPlanDeclaredUnitsOfEntitlement ?? undefined,
-          },
-        }),
-      );
-
-      for (const lot of draft.lots) {
-        await withPublicReference('LOT', (publicReference) =>
-          tx.space.create({
+    let property;
+    try {
+      property = await this.prisma.$transaction(async (tx) => {
+        // Public reference generated here, the same trusted backend flow as
+        // every other creation path — never derived from the strata plan
+        // number, the confirmed name, the document id, or the organisation
+        // id (see M15.2 Public Reference spec Section 17).
+        const createdProperty = await withPublicReference('PROP', (publicReference) =>
+          tx.property.create({
             data: {
               organisationId,
-              propertyId: createdProperty.id,
               publicReference,
-              name: `Lot ${lot.lotNumber}`,
-              code: `LOT-${lot.lotNumber}`,
-              spaceType: 'APARTMENT',
-              isStrataLot: true,
-              strataClassification: 'LOT',
-              lotNumber: lot.lotNumber,
-              entitlementValue: lot.unitsOfEntitlement,
+              name: draft.propertyName as string,
+              code: draft.code as string,
+              addressLine1: draft.addressLine1 ?? 'Not provided',
+              addressLine2: draft.addressLine2 ?? undefined,
+              city: draft.city ?? 'Not provided',
+              state: draft.state ?? undefined,
+              country: draft.country,
+              postalCode: draft.postalCode ?? undefined,
+              propertyType: draft.propertyType,
+              isStrataManaged: true,
+              strataStatus: 'ACTIVE',
+              strataPlanNumber: draft.strataPlanNumber ?? undefined,
+              strataSchemeName: draft.strataSchemeName ?? undefined,
+              strataPlanDeclaredUnitsOfEntitlement:
+                draft.strataPlanDeclaredUnitsOfEntitlement ?? undefined,
             },
           }),
         );
+
+        for (const lot of draft.lots) {
+          await withPublicReference('LOT', (publicReference) =>
+            tx.space.create({
+              data: {
+                organisationId,
+                propertyId: createdProperty.id,
+                publicReference,
+                name: `Lot ${lot.lotNumber}`,
+                code: `LOT-${lot.lotNumber}`,
+                spaceType: 'APARTMENT',
+                isStrataLot: true,
+                strataClassification: 'LOT',
+                lotNumber: lot.lotNumber,
+                entitlementValue: lot.unitsOfEntitlement,
+              },
+            }),
+          );
+        }
+
+        await tx.propertyDocument.update({
+          where: { id: document.id },
+          data: {
+            status: 'CONFIRMED',
+            createdPropertyId: createdProperty.id,
+            confirmedByUserId: auth.userId,
+            confirmedAt: new Date(),
+          },
+        });
+
+        await recordActivity(tx, {
+          organisationId,
+          propertyId: createdProperty.id,
+          actorUserId: auth.userId,
+          eventType: 'PROPERTY_CREATED',
+          entityType: 'Property',
+          entityId: createdProperty.id,
+          title: `${createdProperty.name} created`,
+        });
+        await recordActivity(tx, {
+          organisationId,
+          propertyId: createdProperty.id,
+          actorUserId: auth.userId,
+          eventType: 'STRATA_PROPERTY_CREATED_FROM_PLAN',
+          entityType: 'Property',
+          entityId: createdProperty.id,
+          title:
+            `${createdProperty.name} created from Strata Plan ${draft.strataPlanNumber ?? ''}`.trim(),
+        });
+        await recordActivity(tx, {
+          organisationId,
+          propertyId: createdProperty.id,
+          actorUserId: auth.userId,
+          eventType: 'STRATA_PLAN_CONFIRMED',
+          entityType: 'PropertyDocument',
+          entityId: document.id,
+          title: `Strata plan confirmed — ${draft.lots.length} lots created`,
+        });
+
+        return createdProperty;
+      });
+    } catch (err) {
+      // A concurrent confirm() for the SAME document can lose the race on
+      // Property's (organisationId, code) unique constraint — both calls
+      // pass the codeClash pre-check (neither has committed yet), both
+      // enter the transaction, and Postgres accepts only one INSERT.
+      // Recover exactly like the idempotent re-confirm path at the top of
+      // this method: hand the loser back the winner's already-committed
+      // property, never a raw Prisma/Postgres error surfacing as an
+      // opaque 500. See isPropertyCodeConflict's doc comment for why this
+      // can only match this specific constraint, never an unrelated one.
+      if (isPropertyCodeConflict(err)) {
+        const refetched = await this.prisma.propertyDocument.findUnique({
+          where: { id: document.id },
+        });
+        if (refetched?.createdPropertyId) {
+          const winnerProperty = await this.prisma.property.findUnique({
+            where: { id: refetched.createdPropertyId },
+          });
+          if (winnerProperty) return winnerProperty;
+        }
+        // The code collision wasn't actually this document's own confirm
+        // winning the race (e.g. a genuinely different property already
+        // held this code and codeClash's pre-check simply lost a narrower
+        // race) — a clean, expected conflict, not a bug.
+        throw new ConflictError(`A property with code "${draft.code}" already exists`);
       }
-
-      await tx.propertyDocument.update({
-        where: { id: document.id },
-        data: {
-          status: 'CONFIRMED',
-          createdPropertyId: createdProperty.id,
-          confirmedByUserId: auth.userId,
-          confirmedAt: new Date(),
-        },
-      });
-
-      await recordActivity(tx, {
-        organisationId,
-        propertyId: createdProperty.id,
-        actorUserId: auth.userId,
-        eventType: 'PROPERTY_CREATED',
-        entityType: 'Property',
-        entityId: createdProperty.id,
-        title: `${createdProperty.name} created`,
-      });
-      await recordActivity(tx, {
-        organisationId,
-        propertyId: createdProperty.id,
-        actorUserId: auth.userId,
-        eventType: 'STRATA_PROPERTY_CREATED_FROM_PLAN',
-        entityType: 'Property',
-        entityId: createdProperty.id,
-        title:
-          `${createdProperty.name} created from Strata Plan ${draft.strataPlanNumber ?? ''}`.trim(),
-      });
-      await recordActivity(tx, {
-        organisationId,
-        propertyId: createdProperty.id,
-        actorUserId: auth.userId,
-        eventType: 'STRATA_PLAN_CONFIRMED',
-        entityType: 'PropertyDocument',
-        entityId: document.id,
-        title: `Strata plan confirmed — ${draft.lots.length} lots created`,
-      });
-
-      return createdProperty;
-    });
+      throw err;
+    }
 
     return property;
   }

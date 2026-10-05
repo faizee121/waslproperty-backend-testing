@@ -454,6 +454,18 @@ model Space {
   workOrders          WorkOrder[]
   quoteRounds         QuoteRound[]
 
+  /// A strata lot number must be unique within its Property (never
+  /// enforced across properties) — distinct from `code` above, which is
+  /// Space's own separate general-purpose unique identifier. Prisma's
+  /// schema DSL has no way to express a PARTIAL unique index (lotNumber is
+  /// legitimately NULL for every non-lot Space — COMMON_PROPERTY,
+  /// UNCLASSIFIED, and every space on a non-strata property — and NULLs
+  /// must never collide with each other), so this is NOT declared as a
+  /// Prisma `@@unique` here; it is enforced purely via a hand-written
+  /// migration (see prisma/migrations/20261005100000_add_space_lot_number_unique_index)
+  /// creating `CREATE UNIQUE INDEX ... WHERE "lotNumber" IS NOT NULL`. Any
+  /// future schema change must not assume this constraint doesn't exist
+  /// just because it isn't visible here.
   @@unique([propertyId, code])
   @@index([organisationId])
   @@index([propertyId])
@@ -711,6 +723,15 @@ enum ActivityEventType {
   /// event per save, never one per lot, to avoid a noisy trail when
   /// entering 100+ lots.
   STRATA_ENTITLEMENTS_UPDATED
+  /// A warning signal only, never a block: a lot/UOE or classification
+  /// edit on an already-ACTIVE scheme left SUM(lot UOE) no longer equal
+  /// to the declared Strata Plan total. completeSetup() enforces this as
+  /// a hard gate before a scheme may ever BECOME ACTIVE; once ACTIVE,
+  /// legitimate edits (a lot's entitlement correction, a reclassification)
+  /// must still be allowed, so this fires instead of blocking, giving
+  /// staff an explicit, visible prompt to reconcile rather than a silent
+  /// divergence only noticed if someone happens to check the summary.
+  STRATA_RECONCILIATION_MISMATCH
   /// SETUP_IN_PROGRESS -> ACTIVE — the guided setup flow's final step.
   STRATA_SETUP_COMPLETED
   /// M15 — AI-assisted strata onboarding lifecycle. These are
@@ -1789,6 +1810,10 @@ model CommunicationRecipient {
   @@index([communicationId])
   @@index([contactId])
   @@index([userId])
+  /// Backs get_communication_timeline's `WHERE propertyId = ? AND
+  /// communication...` lookup (src/modules/ai/tools/tools.ts) — without
+  /// it, every call scans the full table rather than one property's rows.
+  @@index([propertyId])
   @@map("communication_recipients")
 }
 
