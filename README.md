@@ -86,3 +86,7 @@ A **temporary** staging deployment — replaced by real AWS infrastructure later
 - `WASLSIGN_SERVICE_CLIENT_ID` / `WASLSIGN_SERVICE_CLIENT_SECRET` — from WaslSign's `scripts/create-service-client.ts`
 - `WASLSIGN_WEBHOOK_SECRET` — must exactly match the same variable in the local WaslSign `.env`
 - All other required vars (`JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `AWS_REGION`, `S3_BUCKET_NAME`, etc.) as documented in `.env.example`
+
+
+
+<!-- testing full CI/CD pipeline --><!-- testing full CI/CD pipeline -->
